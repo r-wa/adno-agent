@@ -40,9 +40,10 @@ if (-not $isAdmin) {
     exit 1
 }
 
-# Validate API key format
-if (-not $ApiKey.StartsWith("agnt_")) {
+# Validate API key format (skip for placeholder)
+if ($ApiKey -ne "ROTATE_KEY_FIRST" -and $ApiKey -notlike "agnt_*") {
     Write-Fail "Error: Invalid API key format (must start with 'agnt_')"
+    Write-Fail "Received: $ApiKey"
     exit 1
 }
 
