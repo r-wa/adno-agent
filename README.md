@@ -18,17 +18,34 @@ The adno agent is a Windows service that runs in the background to process tasks
 - Administrator privileges
 - Active adno workspace account
 
-### Quick Install
+### Quick Install (Recommended)
+
+Download and run the installation script:
+
+```powershell
+# Download installer
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/r-wa/adno-agent/main/install.ps1" -OutFile "install.ps1"
+
+# Run with your API key (will prompt for admin privileges)
+.\install.ps1 -ApiKey "agnt_your-key-here"
+```
+
+**Optional parameters:**
+- `-ApiUrl` - Custom adno server URL (default: `https://app.adno.dev`)
+- `-Version` - Specific version to install (default: `latest`)
+- `-InstallDir` - Custom installation directory (default: `C:\Program Files\adno Agent`)
+
+The installer will:
+- Download the agent binary with checksum verification
+- Configure environment variables
+- Install as a Windows service with auto-restart on failure
+- Start the agent automatically
+
+### Web UI Install
 
 1. **Get your API key** from the adno web app at `/settings/agents`
 2. **Copy the installation command** provided in the UI
 3. **Paste and run** in PowerShell (will prompt for admin privileges automatically)
-
-The installer will:
-- Download the latest agent binary
-- Configure environment variables
-- Install as a Windows service
-- Start the agent automatically
 
 ### Manual Installation
 
