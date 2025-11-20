@@ -91,7 +91,8 @@ try {
 # Download and verify checksum
 Write-Info "Verifying checksum..."
 try {
-    $expectedHash = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing).Content.Trim()
+    $checksumResponse = Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing
+    $expectedHash = [System.Text.Encoding]::UTF8.GetString($checksumResponse.Content).Trim()
     $actualHash = (Get-FileHash -Path $binaryPath -Algorithm SHA256).Hash
 
     if ($actualHash -eq $expectedHash) {

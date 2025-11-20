@@ -15,7 +15,11 @@
   },
   "pkg": {
     "targets": ["node18-win-x64"],
-    "outputPath": "dist"
+    "outputPath": "dist",
+    "assets": [
+      "node_modules/axios/**/*",
+      "node_modules/node-fetch/**/*"
+    ]
   },
   "repository": {
     "type": "git",
