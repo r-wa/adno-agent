@@ -55,7 +55,7 @@ Write-Info "API URL: $ApiUrl"
 Write-Info "Install Directory: $InstallDir"
 Write-Info ""
 
-# Determine download URL
+# Determine download URLs
 $binaryName = "adno-agent-windows-x64.exe"
 if ($Version -eq "latest") {
     $downloadUrl = "https://github.com/r-wa/adno-agent/releases/latest/download/$binaryName"
@@ -64,6 +64,10 @@ if ($Version -eq "latest") {
     $downloadUrl = "https://github.com/r-wa/adno-agent/releases/download/$Version/$binaryName"
     $checksumUrl = "https://github.com/r-wa/adno-agent/releases/download/$Version/$binaryName.sha256"
 }
+
+# NSSM (Non-Sucking Service Manager) for Windows service wrapper
+$nssmVersion = "2.24"
+$nssmUrl = "https://nssm.cc/release/nssm-$nssmVersion.zip"
 
 # Create installation directory
 Write-Info "Creating installation directory..."
@@ -110,6 +114,29 @@ try {
     Write-Warn "Continuing anyway (use at your own risk)..."
 }
 
+# Download and extract NSSM
+Write-Info "Downloading NSSM (service wrapper)..."
+$nssmZip = Join-Path $env:TEMP "nssm.zip"
+$nssmExtract = Join-Path $env:TEMP "nssm"
+try {
+    Invoke-WebRequest -Uri $nssmUrl -OutFile $nssmZip -UseBasicParsing
+    Expand-Archive -Path $nssmZip -DestinationPath $nssmExtract -Force
+
+    # Copy the appropriate architecture nssm.exe to install directory
+    $nssmExe = Join-Path $nssmExtract "nssm-$nssmVersion\win64\nssm.exe"
+    $nssmPath = Join-Path $InstallDir "nssm.exe"
+    Copy-Item $nssmExe $nssmPath -Force
+
+    # Cleanup
+    Remove-Item $nssmZip -Force -ErrorAction SilentlyContinue
+    Remove-Item $nssmExtract -Recurse -Force -ErrorAction SilentlyContinue
+
+    Write-Success "[OK] NSSM downloaded"
+} catch {
+    Write-Fail "Failed to download NSSM: $_"
+    exit 1
+}
+
 # Configure environment variables
 Write-Info "Configuring environment variables..."
 try {
@@ -149,13 +176,14 @@ Write-Info "Configuration saved to: $envFile"
 
 # Remove existing service if it exists
 $serviceName = "AdnoAgent"
+$nssmPath = Join-Path $InstallDir "nssm.exe"
 $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 if ($existingService) {
     Write-Info "Removing existing service..."
     try {
-        Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+        & $nssmPath stop $serviceName | Out-Null
         Start-Sleep -Seconds 2
-        sc.exe delete $serviceName | Out-Null
+        & $nssmPath remove $serviceName confirm | Out-Null
         Start-Sleep -Seconds 2
         Write-Success "[OK] Existing service removed"
     } catch {
@@ -163,19 +191,39 @@ if ($existingService) {
     }
 }
 
-# Create Windows service
+# Create Windows service using NSSM
 Write-Info "Creating Windows service..."
 try {
-    $scResult = sc.exe create $serviceName binPath="`"$binaryPath`"" DisplayName="adno Agent" start=auto
+    # Install the service
+    & $nssmPath install $serviceName $binaryPath | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        throw "Service creation failed with exit code $LASTEXITCODE"
+        throw "Service installation failed with exit code $LASTEXITCODE"
     }
 
     # Set service description
-    sc.exe description $serviceName "Background processing agent for adno workspace automation" | Out-Null
+    & $nssmPath set $serviceName Description "Background processing agent for adno workspace automation" | Out-Null
+
+    # Set display name
+    & $nssmPath set $serviceName DisplayName "adno Agent" | Out-Null
+
+    # Set startup directory
+    & $nssmPath set $serviceName AppDirectory $InstallDir | Out-Null
+
+    # Set environment variables for the service
+    & $nssmPath set $serviceName AppEnvironmentExtra "ADNO_API_KEY=$ApiKey" "ADNO_API_URL=$ApiUrl" | Out-Null
+
+    # Configure service to start automatically
+    & $nssmPath set $serviceName Start SERVICE_AUTO_START | Out-Null
 
     # Configure service to restart on failure
-    sc.exe failure $serviceName reset=86400 actions=restart/10000/restart/10000/restart/10000 | Out-Null
+    & $nssmPath set $serviceName AppExit Default Restart | Out-Null
+    & $nssmPath set $serviceName AppRestartDelay 10000 | Out-Null
+
+    # Set output logging
+    $logDir = Join-Path $InstallDir "logs"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    & $nssmPath set $serviceName AppStdout (Join-Path $logDir "service-output.log") | Out-Null
+    & $nssmPath set $serviceName AppStderr (Join-Path $logDir "service-error.log") | Out-Null
 
     Write-Success "[OK] Service created"
 } catch {
