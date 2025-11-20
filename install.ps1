@@ -69,7 +69,7 @@ if ($Version -eq "latest") {
 Write-Info "Creating installation directory..."
 try {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    Write-Success "✓ Directory created"
+    Write-Success "[OK] Directory created"
 } catch {
     Write-Fail "Failed to create directory: $_"
     exit 1
@@ -82,7 +82,7 @@ Write-Info "URL: $downloadUrl"
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Invoke-WebRequest -Uri $downloadUrl -OutFile $binaryPath -UseBasicParsing
-    Write-Success "✓ Binary downloaded"
+    Write-Success "[OK] Binary downloaded"
 } catch {
     Write-Fail "Failed to download binary: $_"
     exit 1
@@ -95,7 +95,7 @@ try {
     $actualHash = (Get-FileHash -Path $binaryPath -Algorithm SHA256).Hash
 
     if ($actualHash -eq $expectedHash) {
-        Write-Success "✓ Checksum verified"
+        Write-Success "[OK] Checksum verified"
     } else {
         Write-Fail "Checksum mismatch!"
         Write-Fail "Expected: $expectedHash"
@@ -114,7 +114,7 @@ Write-Info "Configuring environment variables..."
 try {
     [Environment]::SetEnvironmentVariable("ADNO_API_KEY", $ApiKey, "Machine")
     [Environment]::SetEnvironmentVariable("ADNO_API_URL", $ApiUrl, "Machine")
-    Write-Success "✓ Environment variables set"
+    Write-Success "[OK] Environment variables set"
 } catch {
     Write-Fail "Failed to set environment variables: $_"
     exit 1
@@ -156,7 +156,7 @@ if ($existingService) {
         Start-Sleep -Seconds 2
         sc.exe delete $serviceName | Out-Null
         Start-Sleep -Seconds 2
-        Write-Success "✓ Existing service removed"
+        Write-Success "[OK] Existing service removed"
     } catch {
         Write-Warn "Warning: Could not remove existing service: $_"
     }
@@ -176,7 +176,7 @@ try {
     # Configure service to restart on failure
     sc.exe failure $serviceName reset=86400 actions=restart/10000/restart/10000/restart/10000 | Out-Null
 
-    Write-Success "✓ Service created"
+    Write-Success "[OK] Service created"
 } catch {
     Write-Fail "Failed to create service: $_"
     exit 1
@@ -190,7 +190,7 @@ try {
 
     $service = Get-Service -Name $serviceName
     if ($service.Status -eq "Running") {
-        Write-Success "✓ Service started successfully"
+        Write-Success "[OK] Service started successfully"
     } else {
         throw "Service is not running (status: $($service.Status))"
     }
@@ -204,7 +204,7 @@ try {
 # Success!
 Write-Success ""
 Write-Success "================================"
-Write-Success "✓ Installation Complete!"
+Write-Success "[OK] Installation Complete!"
 Write-Success "================================"
 Write-Info ""
 Write-Info "Service Management Commands:"
