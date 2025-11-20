@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 
+// IMPORTANT: Load environment variables BEFORE any other imports
+// This ensures dotenv runs before logger and other modules try to read process.env
+import dotenv from 'dotenv'
+dotenv.config()
+
 import { AgentRuntime } from './runtime/AgentRuntime'
 import { loadConfig } from './config'
 import { logger } from './utils/logger'
