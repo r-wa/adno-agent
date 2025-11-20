@@ -11,10 +11,10 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "type-check": "tsc --noEmit",
-    "package": "pkg dist/index.js --targets node20-win-x64 --output adno-agent-windows-x64.exe"
+    "package": "pkg dist/index.js --targets node18-win-x64 --output adno-agent-windows-x64.exe"
   },
   "pkg": {
-    "targets": ["node20-win-x64"],
+    "targets": ["node18-win-x64"],
     "outputPath": "dist"
   },
   "repository": {
@@ -36,6 +36,6 @@
     "tsc-alias": "^1.8.10"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=18.0.0"
   }
 }
