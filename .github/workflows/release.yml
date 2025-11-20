@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    name: Build and Release Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Install pkg globally
+        run: npm install -g pkg
+
+      - name: Package binary
+        run: pkg dist/index.js --targets node20-win-x64 --output adno-agent-windows-x64.exe
+
+      - name: Generate checksum
+        run: |
+          $hash = Get-FileHash -Path adno-agent-windows-x64.exe -Algorithm SHA256
+          $hash.Hash | Out-File -FilePath adno-agent-windows-x64.exe.sha256 -NoNewline
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            adno-agent-windows-x64.exe
+            adno-agent-windows-x64.exe.sha256
+          body: |
+            ## adno Agent ${{ github.ref_name }}
+
+            ### Installation
+
+            Download and install using PowerShell (requires administrator privileges):
+
+            ```powershell
+            # See installation instructions at https://github.com/r-wa/adno
+            ```
+
+            ### What's Changed
+
+            See commit history for changes in this release.
+
+            ### Checksums
+
+            - **SHA256**: See `adno-agent-windows-x64.exe.sha256`
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
