@@ -1,6 +1,6 @@
 {
   "name": "adno-agent",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Background processing agent for adno workspace automation",
   "main": "dist/index.js",
   "bin": {
