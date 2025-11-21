@@ -54,7 +54,8 @@ export class AgentRuntime {
       await this.loadConfig()
 
       // 4. Send agent_starting signal
-      await this.apiClient.sendSignal({
+      logger.info('Sending agent_starting signal...')
+      const startingSignalSent = await this.apiClient.sendSignal({
         type: 'agent_starting',
         message: 'Agent starting up',
         payload: {
@@ -63,6 +64,7 @@ export class AgentRuntime {
           platform: process.platform,
         },
       })
+      logger.info('Agent_starting signal sent', { success: startingSignalSent })
 
       // 5. Start health check server
       await this.healthCheckServer.start(this.getHealthStatus.bind(this))
@@ -260,7 +262,8 @@ export class AgentRuntime {
    */
   private async sendHeartbeat(): Promise<void> {
     try {
-      await this.apiClient.sendSignal({
+      logger.info('Sending heartbeat...')
+      const sent = await this.apiClient.sendSignal({
         type: 'heartbeat',
         payload: {
           version: this.versionChecker.getCurrentVersion(),
@@ -270,7 +273,7 @@ export class AgentRuntime {
           memory: process.memoryUsage(),
         },
       })
-      logger.debug('Heartbeat sent')
+      logger.info('Heartbeat sent', { success: sent })
     } catch (error) {
       logger.error('Failed to send heartbeat', { error })
     }
