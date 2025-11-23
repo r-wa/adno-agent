@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+// Suppress experimental fetch warnings (Node 18 compatibility)
+process.removeAllListeners('warning')
+
 // IMPORTANT: Load environment variables BEFORE any other imports
 // This ensures dotenv runs before logger and other modules try to read process.env
 import dotenv from 'dotenv'
