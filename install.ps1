@@ -2,16 +2,16 @@
 # Downloads and installs the latest adno agent as a Windows service
 #
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File install.ps1 -ApiKey "your-api-key"
+#   powershell -ExecutionPolicy Bypass -File install.ps1 -ApiUrl "https://app.adno.dev"
 #
 # Parameters:
-#   -ApiKey       (Required) Your adno agent API key from the web dashboard
+#   -ApiKey       (Optional) Your adno agent API key (will prompt if not provided)
 #   -ApiUrl       (Optional) adno server URL (default: https://app.adno.dev)
 #   -Version      (Optional) Specific version to install (default: latest)
 #   -InstallDir   (Optional) Installation directory (default: C:\Program Files\adno Agent)
 
 param(
-    [Parameter(Mandatory=$true, HelpMessage="Your adno agent API key")]
+    [Parameter(Mandatory=$false, HelpMessage="Your adno agent API key")]
     [string]$ApiKey,
 
     [Parameter(Mandatory=$false)]
@@ -67,6 +67,81 @@ function Compare-Versions {
     return 0
 }
 
+# Helper function: Prompt for API key with validation
+function Get-ValidatedApiKey {
+    param([string]$ApiUrl)
+    $maxAttempts = 3
+    $attempt = 0
+
+    while ($attempt -lt $maxAttempts) {
+        Write-Host ""
+        Write-Host "API Key" -ForegroundColor Cyan
+        Write-Host "━━━━━━━" -ForegroundColor DarkGray
+        if ($attempt -eq 0) {
+            Write-Host "Generate one at: $ApiUrl/settings/api-keys" -ForegroundColor Gray
+            Write-Host "Format: agnt_ followed by 40 hex characters" -ForegroundColor Gray
+            Write-Host ""
+        }
+
+        $apiKey = Read-Host "Enter your API key"
+
+        if ($apiKey -match '^agnt_[a-f0-9]{40}$') {
+            Write-Host "  ✓ API key validated" -ForegroundColor Green
+            return $apiKey
+        }
+
+        $attempt++
+        Write-Host ""
+        Write-Host "  ✗ Invalid format" -ForegroundColor Red
+
+        if ($attempt -lt $maxAttempts) {
+            Write-Host "    Expected: agnt_ followed by 40 hex characters (0-9, a-f)" -ForegroundColor Yellow
+            Write-Host "    Please try again ($attempt/$maxAttempts)" -ForegroundColor Yellow
+        } else {
+            Write-Host "    Too many failed attempts. Please check your API key and try again." -ForegroundColor Red
+            exit 1
+        }
+    }
+}
+
+# Helper function: Download with retry and progress
+function Download-WithRetry {
+    param([string]$Url, [string]$OutFile, [string]$Activity, [int]$MaxRetries = 3)
+    $retryCount = 0
+    while ($retryCount -lt $MaxRetries) {
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+            $webClient = New-Object System.Net.WebClient
+            $webClient.Headers.Add("User-Agent", "Adno-Installer/1.0")
+
+            Register-ObjectEvent -InputObject $webClient -EventName DownloadProgressChanged -SourceIdentifier WebClient.DownloadProgressChanged -Action {
+                $percent = $EventArgs.ProgressPercentage
+                $received = $EventArgs.BytesReceived / 1MB
+                $total = $EventArgs.TotalBytesToReceive / 1MB
+                Write-Progress -Activity $Activity -Status ("$([math]::Round($received, 1)) MB / $([math]::Round($total, 1)) MB") -PercentComplete $percent
+            } | Out-Null
+
+            $webClient.DownloadFileTaskAsync($Url, $OutFile).Wait()
+            Write-Progress -Activity $Activity -Completed
+            Unregister-Event -SourceIdentifier WebClient.DownloadProgressChanged -ErrorAction SilentlyContinue
+            $webClient.Dispose()
+            return
+        } catch {
+            Write-Progress -Activity $Activity -Completed
+            Unregister-Event -SourceIdentifier WebClient.DownloadProgressChanged -ErrorAction SilentlyContinue
+            $retryCount++
+            if ($retryCount -lt $MaxRetries) {
+                $waitTime = [math]::Pow(2, $retryCount)
+                Write-Host "  ✗ Download failed. Retrying in $waitTime seconds..." -ForegroundColor Yellow
+                Start-Sleep -Seconds $waitTime
+            } else {
+                throw "Failed to download after $MaxRetries attempts: $_"
+            }
+        }
+    }
+}
+
 # Check if running as administrator
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
@@ -75,20 +150,23 @@ if (-not $isAdmin) {
     exit 1
 }
 
-# Validate API key format (skip for placeholder)
-if ($ApiKey -ne "ROTATE_KEY_FIRST" -and $ApiKey -notlike "agnt_*") {
-    Write-Fail "Error: Invalid API key format (must start with 'agnt_')"
-    Write-Fail "Received: $ApiKey"
-    exit 1
-}
-
-Write-Info "================================"
-Write-Info "adno Agent Installer"
-Write-Info "================================"
-Write-Info "Version: $Version"
-Write-Info "API URL: $ApiUrl"
-Write-Info "Install Directory: $InstallDir"
-Write-Info ""
+# Welcome screen
+Clear-Host
+Write-Host ""
+Write-Host "Adno Agent Installer" -ForegroundColor Cyan
+Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "This will install the workspace agent as a Windows service." -ForegroundColor White
+Write-Host "Estimated time: ~1 minute" -ForegroundColor Gray
+Write-Host ""
+Write-Host "Configuration:" -ForegroundColor Cyan
+Write-Host "  Version:     $Version" -ForegroundColor Gray
+Write-Host "  API URL:     $ApiUrl" -ForegroundColor Gray
+Write-Host "  Install Dir: $InstallDir" -ForegroundColor Gray
+Write-Host ""
+Write-Host "Press Enter to begin..." -ForegroundColor Gray -NoNewline
+Read-Host
+Write-Host ""
 
 # Determine download URLs
 $binaryName = "adno-agent-windows-x64.exe"
@@ -111,42 +189,42 @@ if ($Version -eq "latest") {
     try {
         $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/r-wa/adno-agent/releases/latest" -UseBasicParsing
         $targetVersion = $latestRelease.tag_name -replace '^agent-v', ''
-        Write-Info "Latest version: $targetVersion"
+        Write-Host "  Latest version: $targetVersion" -ForegroundColor Gray
     } catch {
-        Write-Warn "Warning: Could not resolve latest version: $_"
-        Write-Info "Continuing with download..."
+        Write-Warn "  ⚠ Could not resolve latest version: $_"
     }
 }
 
 # Check installed version
 $installedVersion = Get-InstalledVersion -InstallDir $InstallDir
 if ($installedVersion) {
-    Write-Info "Installed version: $installedVersion"
+    Write-Host "  Installed version: $installedVersion" -ForegroundColor Gray
     $comparison = Compare-Versions -Current $installedVersion -Target $targetVersion
 
     if ($comparison -eq 0) {
-        Write-Success "Version $installedVersion is already installed and up to date!"
-        Write-Info "Skipping download, proceeding to service configuration..."
+        Write-Success "  ✓ Version $installedVersion is already up to date"
+        Write-Host "  Skipping download, proceeding to service configuration..." -ForegroundColor Gray
         $skipDownload = $true
     } elseif ($comparison -lt 0) {
-        Write-Info "Upgrading from v$installedVersion to v$targetVersion"
+        Write-Host "  Upgrading from v$installedVersion to v$targetVersion" -ForegroundColor Cyan
         $skipDownload = $false
     } else {
-        Write-Warn "Warning: Downgrading from v$installedVersion to v$targetVersion"
+        Write-Warn "  ⚠ Downgrading from v$installedVersion to v$targetVersion"
         $skipDownload = $false
     }
 } else {
-    Write-Info "No existing installation detected"
+    Write-Host "  No existing installation detected" -ForegroundColor Gray
     $skipDownload = $false
 }
 
 # Create installation directory
-Write-Info "Creating installation directory..."
+Write-Host ""
+Write-Info "Preparing installation..."
 try {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    Write-Success "[OK] Directory created"
+    Write-Success "  ✓ Installation directory ready"
 } catch {
-    Write-Fail "Failed to create directory: $_"
+    Write-Fail "  ✗ Failed to create directory: $_"
     exit 1
 }
 
@@ -159,46 +237,49 @@ if (-not $skipDownload) {
     $serviceName = "AdnoAgent"
     $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     if ($existingService -and $existingService.Status -eq "Running") {
-        Write-Info "Stopping service before file replacement..."
+        Write-Host "  Stopping existing service..." -ForegroundColor Gray
         Stop-Service -Name $serviceName -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
     }
 
+    Write-Host ""
     Write-Info "Downloading agent binary..."
-    Write-Info "URL: $downloadUrl"
     try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $binaryPath -UseBasicParsing
-        Write-Success "[OK] Binary downloaded"
+        Download-WithRetry -Url $downloadUrl -OutFile $binaryPath -Activity "Downloading agent binary"
+        Write-Success "  ✓ Agent binary downloaded"
     } catch {
-        Write-Fail "Failed to download binary: $_"
+        Write-Host ""
+        Write-Fail "  ✗ Download failed: $_"
         exit 1
     }
 
     # Download and verify checksum
-    Write-Info "Verifying checksum..."
+    Write-Host ""
+    Write-Info "Verifying download integrity..."
     try {
         $checksumResponse = Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing
-        $expectedHash = [System.Text.Encoding]::UTF8.GetString($checksumResponse.Content).Trim()
-        $actualHash = (Get-FileHash -Path $binaryPath -Algorithm SHA256).Hash
+        $expectedHash = [System.Text.Encoding]::UTF8.GetString($checksumResponse.Content).Trim().Split()[0].ToLower()
+        $actualHash = (Get-FileHash -Path $binaryPath -Algorithm SHA256).Hash.ToLower()
 
         if ($actualHash -eq $expectedHash) {
-            Write-Success "[OK] Checksum verified"
+            Write-Success "  ✓ SHA256 checksum verified"
         } else {
-            Write-Fail "Checksum mismatch!"
-            Write-Fail "Expected: $expectedHash"
-            Write-Fail "Actual: $actualHash"
-            Write-Warn "Removing potentially corrupted file..."
+            Write-Fail "  ✗ Checksum verification failed"
+            Write-Fail "    Expected: $expectedHash"
+            Write-Fail "    Actual: $actualHash"
             Remove-Item $binaryPath -Force
             exit 1
         }
     } catch {
-        Write-Warn "Warning: Could not verify checksum: $_"
-        Write-Warn "Continuing anyway (use at your own risk)..."
+        Write-Warn "  ⚠ Could not verify checksum"
+        $continue = Read-Host "    Continue anyway? (Y/N)"
+        if ($continue -ne 'Y') {
+            Remove-Item $binaryPath -Force
+            exit 0
+        }
     }
 
     # Download version file for future version checks
-    Write-Info "Downloading version metadata..."
     try {
         $versionUrl = if ($Version -eq "latest") {
             "https://github.com/r-wa/adno-agent/releases/latest/download/$binaryName.version"
@@ -206,50 +287,57 @@ if (-not $skipDownload) {
             "https://github.com/r-wa/adno-agent/releases/download/$Version/$binaryName.version"
         }
         Invoke-WebRequest -Uri $versionUrl -OutFile $versionFilePath -UseBasicParsing
-        Write-Success "[OK] Version metadata downloaded"
     } catch {
-        Write-Warn "Warning: Could not download version file: $_"
         # Create version file manually if download fails
         if ($targetVersion) {
             $targetVersion | Out-File -FilePath $versionFilePath -Encoding ASCII -NoNewline
-            Write-Info "Created version file manually"
         }
     }
-} else {
-    Write-Info "Using existing binary at: $binaryPath"
 }
 
-# Download and extract NSSM
-Write-Info "Downloading NSSM (service wrapper)..."
-$nssmZip = Join-Path $env:TEMP "nssm.zip"
-$nssmExtract = Join-Path $env:TEMP "nssm"
-try {
-    Invoke-WebRequest -Uri $nssmUrl -OutFile $nssmZip -UseBasicParsing
-    Expand-Archive -Path $nssmZip -DestinationPath $nssmExtract -Force
+# Download and extract NSSM if not present
+$nssmPath = Join-Path $InstallDir "nssm.exe"
+if (!(Test-Path $nssmPath)) {
+    Write-Host ""
+    Write-Info "Downloading service wrapper..."
+    $nssmZip = Join-Path $env:TEMP "nssm.zip"
+    $nssmExtract = Join-Path $env:TEMP "nssm"
+    try {
+        Download-WithRetry -Url $nssmUrl -OutFile $nssmZip -Activity "Downloading NSSM"
 
-    # Copy the appropriate architecture nssm.exe to install directory
-    $nssmExe = Join-Path $nssmExtract "nssm-$nssmVersion\win64\nssm.exe"
-    $nssmPath = Join-Path $InstallDir "nssm.exe"
-    Copy-Item $nssmExe $nssmPath -Force
+        $arch = if ([Environment]::Is64BitOperatingSystem) { "win64" } else { "win32" }
+        Expand-Archive -Path $nssmZip -DestinationPath $nssmExtract -Force
+        Copy-Item "$nssmExtract\nssm-$nssmVersion\$arch\nssm.exe" $nssmPath -Force
 
-    # Cleanup
-    Remove-Item $nssmZip -Force -ErrorAction SilentlyContinue
-    Remove-Item $nssmExtract -Recurse -Force -ErrorAction SilentlyContinue
+        # Cleanup
+        Remove-Item $nssmZip -Force -ErrorAction SilentlyContinue
+        Remove-Item $nssmExtract -Recurse -Force -ErrorAction SilentlyContinue
 
-    Write-Success "[OK] NSSM downloaded"
-} catch {
-    Write-Fail "Failed to download NSSM: $_"
-    exit 1
+        Write-Success "  ✓ Service wrapper installed"
+    } catch {
+        Write-Host ""
+        Write-Fail "  ✗ Failed to download service wrapper: $_"
+        exit 1
+    }
+}
+
+# Prompt for API key if not provided
+if (-not $ApiKey) {
+    Write-Host ""
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+    Write-Host "Configuration" -ForegroundColor Cyan
+    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+    $ApiKey = Get-ValidatedApiKey -ApiUrl $ApiUrl
 }
 
 # Configure environment variables
-Write-Info "Configuring environment variables..."
+Write-Host ""
+Write-Info "Installing service..."
 try {
     [Environment]::SetEnvironmentVariable("ADNO_API_KEY", $ApiKey, "Machine")
     [Environment]::SetEnvironmentVariable("ADNO_API_URL", $ApiUrl, "Machine")
-    Write-Success "[OK] Environment variables set"
 } catch {
-    Write-Fail "Failed to set environment variables: $_"
+    Write-Fail "  ✗ Failed to set environment variables: $_"
     exit 1
 }
 
@@ -277,101 +365,87 @@ MAX_CONCURRENT_TASKS=3
 LOG_LEVEL=info
 "@
 $envContent | Out-File -FilePath $envFile -Encoding UTF8
-Write-Info "Configuration saved to: $envFile"
 
 # Remove existing service if it exists
 $serviceName = "AdnoAgent"
-$nssmPath = Join-Path $InstallDir "nssm.exe"
 $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 if ($existingService) {
-    Write-Info "Removing existing service..."
     try {
-        & $nssmPath stop $serviceName | Out-Null
+        & $nssmPath stop $serviceName 2>&1 | Out-Null
         Start-Sleep -Seconds 2
-        & $nssmPath remove $serviceName confirm | Out-Null
+        & $nssmPath remove $serviceName confirm 2>&1 | Out-Null
         Start-Sleep -Seconds 2
-        Write-Success "[OK] Existing service removed"
     } catch {
-        Write-Warn "Warning: Could not remove existing service: $_"
+        # Ignore errors from removing non-existent service
     }
 }
 
 # Create Windows service using NSSM
-Write-Info "Creating Windows service..."
 try {
     # Install the service
-    & $nssmPath install $serviceName $binaryPath | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Service installation failed with exit code $LASTEXITCODE"
-    }
-
-    # Set service description
-    & $nssmPath set $serviceName Description "Background processing agent for adno workspace automation" | Out-Null
-
-    # Set display name
-    & $nssmPath set $serviceName DisplayName "adno Agent" | Out-Null
-
-    # Set startup directory
-    & $nssmPath set $serviceName AppDirectory $InstallDir | Out-Null
-
-    # Set environment variables for the service
-    & $nssmPath set $serviceName AppEnvironmentExtra "ADNO_API_KEY=$ApiKey" "ADNO_API_URL=$ApiUrl" | Out-Null
-
-    # Configure service to start automatically
-    & $nssmPath set $serviceName Start SERVICE_AUTO_START | Out-Null
-
-    # Configure service to restart on failure
-    & $nssmPath set $serviceName AppExit Default Restart | Out-Null
-    & $nssmPath set $serviceName AppRestartDelay 10000 | Out-Null
+    & $nssmPath install $serviceName $binaryPath 2>&1 | Out-Null
+    & $nssmPath set $serviceName DisplayName "Adno Agent" 2>&1 | Out-Null
+    & $nssmPath set $serviceName Description "Background agent for Adno workspace tasks" 2>&1 | Out-Null
+    & $nssmPath set $serviceName Start SERVICE_AUTO_START 2>&1 | Out-Null
+    & $nssmPath set $serviceName AppEnvironmentExtra "ADNO_API_KEY=$ApiKey" "ADNO_API_URL=$ApiUrl" 2>&1 | Out-Null
 
     # Set output logging
     $logDir = Join-Path $InstallDir "logs"
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-    & $nssmPath set $serviceName AppStdout (Join-Path $logDir "service-output.log") | Out-Null
-    & $nssmPath set $serviceName AppStderr (Join-Path $logDir "service-error.log") | Out-Null
+    & $nssmPath set $serviceName AppStdout (Join-Path $logDir "agent.log") 2>&1 | Out-Null
+    & $nssmPath set $serviceName AppStderr (Join-Path $logDir "agent-error.log") 2>&1 | Out-Null
+    & $nssmPath set $serviceName AppStdoutCreationDisposition 4 2>&1 | Out-Null
+    & $nssmPath set $serviceName AppStderrCreationDisposition 4 2>&1 | Out-Null
 
-    Write-Success "[OK] Service created"
+    # Configure service to restart on failure
+    & $nssmPath set $serviceName AppExit Default Restart 2>&1 | Out-Null
+    & $nssmPath set $serviceName AppRestartDelay 5000 2>&1 | Out-Null
+
+    Write-Success "  ✓ Service configured"
 } catch {
-    Write-Fail "Failed to create service: $_"
+    Write-Fail "  ✗ Failed to create service: $_"
     exit 1
 }
 
 # Start service
-Write-Info "Starting service..."
+Write-Host ""
+Write-Info "Starting agent..."
 try {
-    Start-Service -Name $serviceName -ErrorAction Stop
-    Start-Sleep -Seconds 2
+    & $nssmPath start $serviceName 2>&1 | Out-Null
+    Write-Host "  Waiting for service to start (this may take up to 30 seconds)..." -ForegroundColor Gray
+    Start-Sleep -Seconds 5
 
-    $service = Get-Service -Name $serviceName
-    if ($service.Status -eq "Running") {
-        Write-Success "[OK] Service started successfully"
+    $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+    if ($service -and $service.Status -eq "Running") {
+        Write-Host ""
+        Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Green
+        Write-Host "✓ Installation Complete!" -ForegroundColor Green
+        Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "Your agent is now running as a Windows service." -ForegroundColor White
+        Write-Host ""
+        Write-Host "Next: Verify agent status" -ForegroundColor Cyan
+        Write-Host "  → Open: $ApiUrl/settings/agents" -ForegroundColor Gray
+        Write-Host "  → You should see your agent listed as 'Online'" -ForegroundColor Gray
+        Write-Host "  → Pending tasks will begin processing automatically" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "Logs: $logDir" -ForegroundColor DarkGray
     } else {
-        throw "Service is not running (status: $($service.Status))"
+        Write-Host ""
+        Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Red
+        Write-Host "✗ Installation Failed" -ForegroundColor Red
+        Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Service status: $($service.Status)" -ForegroundColor Yellow
+        Write-Host "Check logs: $logDir\agent-error.log" -ForegroundColor Yellow
     }
 } catch {
-    Write-Fail "Failed to start service: $_"
-    Write-Info "The service was installed but could not start."
-    Write-Info "Check Event Viewer for error details."
+    Write-Host ""
+    Write-Fail "  ✗ Failed to start service: $_"
+    Write-Host ""
+    Write-Host "The service was installed but could not start." -ForegroundColor Yellow
+    Write-Host "Check Event Viewer or $logDir\agent-error.log for details." -ForegroundColor Yellow
     exit 1
 }
 
-# Success!
-Write-Success ""
-Write-Success "================================"
-Write-Success "[OK] Installation Complete!"
-Write-Success "================================"
-Write-Info ""
-Write-Info "Service Management Commands:"
-Write-Host "  Status:  " -NoNewline; Write-Host "Get-Service -Name $serviceName" -ForegroundColor Yellow
-Write-Host "  Stop:    " -NoNewline; Write-Host "Stop-Service -Name $serviceName" -ForegroundColor Yellow
-Write-Host "  Start:   " -NoNewline; Write-Host "Start-Service -Name $serviceName" -ForegroundColor Yellow
-Write-Host "  Restart: " -NoNewline; Write-Host "Restart-Service -Name $serviceName" -ForegroundColor Yellow
-Write-Info ""
-Write-Info "View logs:"
-Write-Host "  Get-EventLog -LogName Application -Source $serviceName -Newest 50" -ForegroundColor Yellow
-Write-Info ""
-Write-Info "Configuration file:"
-Write-Host "  $envFile" -ForegroundColor Yellow
-Write-Info ""
-Write-Success "The agent is now running and will start automatically on system boot."
-Write-Info "Check the adno web dashboard to verify the agent connection."
+Write-Host ""
