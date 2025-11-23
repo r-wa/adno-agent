@@ -86,13 +86,13 @@ function Get-ValidatedApiKey {
         $apiKey = Read-Host "Enter your API key"
 
         if ($apiKey -match '^agnt_[a-f0-9]{40}$') {
-            Write-Host "  ✓ API key validated" -ForegroundColor Green
+            Write-Success "  [OK] API key validated"
             return $apiKey
         }
 
         $attempt++
         Write-Host ""
-        Write-Host "  ✗ Invalid format" -ForegroundColor Red
+        Write-Fail "  [FAIL] Invalid format"
 
         if ($attempt -lt $maxAttempts) {
             Write-Host "    Expected: agnt_ followed by 40 hex characters (0-9, a-f)" -ForegroundColor Yellow
@@ -133,7 +133,7 @@ function Download-WithRetry {
             $retryCount++
             if ($retryCount -lt $MaxRetries) {
                 $waitTime = [math]::Pow(2, $retryCount)
-                Write-Host "  ✗ Download failed. Retrying in $waitTime seconds..." -ForegroundColor Yellow
+                Write-Warn "  [WARN] Download failed. Retrying in $waitTime seconds..."
                 Start-Sleep -Seconds $waitTime
             } else {
                 throw "Failed to download after $MaxRetries attempts: $_"
@@ -191,7 +191,7 @@ if ($Version -eq "latest") {
         $targetVersion = $latestRelease.tag_name -replace '^agent-v', ''
         Write-Host "  Latest version: $targetVersion" -ForegroundColor Gray
     } catch {
-        Write-Warn "  ⚠ Could not resolve latest version: $_"
+        Write-Warn "  [WARN] Could not resolve latest version: $_"
     }
 }
 
@@ -202,14 +202,14 @@ if ($installedVersion) {
     $comparison = Compare-Versions -Current $installedVersion -Target $targetVersion
 
     if ($comparison -eq 0) {
-        Write-Success "  ✓ Version $installedVersion is already up to date"
+        Write-Success "  [OK] Version $installedVersion is already up to date"
         Write-Host "  Skipping download, proceeding to service configuration..." -ForegroundColor Gray
         $skipDownload = $true
     } elseif ($comparison -lt 0) {
         Write-Host "  Upgrading from v$installedVersion to v$targetVersion" -ForegroundColor Cyan
         $skipDownload = $false
     } else {
-        Write-Warn "  ⚠ Downgrading from v$installedVersion to v$targetVersion"
+        Write-Warn "  [WARN] Downgrading from v$installedVersion to v$targetVersion"
         $skipDownload = $false
     }
 } else {
@@ -222,9 +222,9 @@ Write-Host ""
 Write-Info "Preparing installation..."
 try {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    Write-Success "  ✓ Installation directory ready"
+    Write-Success "  [OK] Installation directory ready"
 } catch {
-    Write-Fail "  ✗ Failed to create directory: $_"
+    Write-Fail "  [FAIL] Failed to create directory: $_"
     exit 1
 }
 
@@ -246,10 +246,10 @@ if (-not $skipDownload) {
     Write-Info "Downloading agent binary..."
     try {
         Download-WithRetry -Url $downloadUrl -OutFile $binaryPath -Activity "Downloading agent binary"
-        Write-Success "  ✓ Agent binary downloaded"
+        Write-Success "  [OK] Agent binary downloaded"
     } catch {
         Write-Host ""
-        Write-Fail "  ✗ Download failed: $_"
+        Write-Fail "  [FAIL] Download failed: $_"
         exit 1
     }
 
@@ -262,16 +262,16 @@ if (-not $skipDownload) {
         $actualHash = (Get-FileHash -Path $binaryPath -Algorithm SHA256).Hash.ToLower()
 
         if ($actualHash -eq $expectedHash) {
-            Write-Success "  ✓ SHA256 checksum verified"
+            Write-Success "  [OK] SHA256 checksum verified"
         } else {
-            Write-Fail "  ✗ Checksum verification failed"
+            Write-Fail "  [FAIL] Checksum verification failed"
             Write-Fail "    Expected: $expectedHash"
             Write-Fail "    Actual: $actualHash"
             Remove-Item $binaryPath -Force
             exit 1
         }
     } catch {
-        Write-Warn "  ⚠ Could not verify checksum"
+        Write-Warn "  [WARN] Could not verify checksum"
         $continue = Read-Host "    Continue anyway? (Y/N)"
         if ($continue -ne 'Y') {
             Remove-Item $binaryPath -Force
@@ -313,10 +313,10 @@ if (!(Test-Path $nssmPath)) {
         Remove-Item $nssmZip -Force -ErrorAction SilentlyContinue
         Remove-Item $nssmExtract -Recurse -Force -ErrorAction SilentlyContinue
 
-        Write-Success "  ✓ Service wrapper installed"
+        Write-Success "  [OK] Service wrapper installed"
     } catch {
         Write-Host ""
-        Write-Fail "  ✗ Failed to download service wrapper: $_"
+        Write-Fail "  [FAIL] Failed to download service wrapper: $_"
         exit 1
     }
 }
@@ -337,7 +337,7 @@ try {
     [Environment]::SetEnvironmentVariable("ADNO_API_KEY", $ApiKey, "Machine")
     [Environment]::SetEnvironmentVariable("ADNO_API_URL", $ApiUrl, "Machine")
 } catch {
-    Write-Fail "  ✗ Failed to set environment variables: $_"
+    Write-Fail "  [FAIL] Failed to set environment variables: $_"
     exit 1
 }
 
@@ -401,9 +401,9 @@ try {
     & $nssmPath set $serviceName AppExit Default Restart 2>&1 | Out-Null
     & $nssmPath set $serviceName AppRestartDelay 5000 2>&1 | Out-Null
 
-    Write-Success "  ✓ Service configured"
+    Write-Success "  [OK] Service configured"
 } catch {
-    Write-Fail "  ✗ Failed to create service: $_"
+    Write-Fail "  [FAIL] Failed to create service: $_"
     exit 1
 }
 
@@ -419,7 +419,7 @@ try {
     if ($service -and $service.Status -eq "Running") {
         Write-Host ""
         Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Green
-        Write-Host "✓ Installation Complete!" -ForegroundColor Green
+        Write-Host "[OK] Installation Complete!" -ForegroundColor Green
         Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Green
         Write-Host ""
         Write-Host "Your agent is now running as a Windows service." -ForegroundColor White
@@ -433,7 +433,7 @@ try {
     } else {
         Write-Host ""
         Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Red
-        Write-Host "✗ Installation Failed" -ForegroundColor Red
+        Write-Host "[FAIL] Installation Failed" -ForegroundColor Red
         Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Red
         Write-Host ""
         Write-Host "Service status: $($service.Status)" -ForegroundColor Yellow
@@ -441,7 +441,7 @@ try {
     }
 } catch {
     Write-Host ""
-    Write-Fail "  ✗ Failed to start service: $_"
+    Write-Fail "  [FAIL] Failed to start service: $_"
     Write-Host ""
     Write-Host "The service was installed but could not start." -ForegroundColor Yellow
     Write-Host "Check Event Viewer or $logDir\agent-error.log for details." -ForegroundColor Yellow
