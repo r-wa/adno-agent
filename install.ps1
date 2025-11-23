@@ -32,6 +32,41 @@ function Write-Info { param([string]$Message) Write-Host $Message -ForegroundCol
 function Write-Warn { param([string]$Message) Write-Host $Message -ForegroundColor Yellow }
 function Write-Fail { param([string]$Message) Write-Host $Message -ForegroundColor Red }
 
+# Helper function: Get installed version
+function Get-InstalledVersion {
+    param([string]$InstallDir)
+    $versionFile = Join-Path $InstallDir "adno-agent.exe.version"
+    if (Test-Path $versionFile) {
+        return (Get-Content $versionFile -Raw).Trim()
+    }
+    return $null
+}
+
+# Helper function: Compare semantic versions
+function Compare-Versions {
+    param(
+        [string]$Current,
+        [string]$Target
+    )
+
+    if ($Current -eq $Target) { return 0 }
+    if (-not $Current) { return -1 }
+    if (-not $Target) { return 1 }
+
+    $currentParts = $Current.Split('.')
+    $targetParts = $Target.Split('.')
+
+    for ($i = 0; $i -lt [Math]::Max($currentParts.Length, $targetParts.Length); $i++) {
+        $currentNum = if ($i -lt $currentParts.Length) { [int]$currentParts[$i] } else { 0 }
+        $targetNum = if ($i -lt $targetParts.Length) { [int]$targetParts[$i] } else { 0 }
+
+        if ($currentNum -lt $targetNum) { return -1 }
+        if ($currentNum -gt $targetNum) { return 1 }
+    }
+
+    return 0
+}
+
 # Check if running as administrator
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
@@ -69,6 +104,42 @@ if ($Version -eq "latest") {
 $nssmVersion = "2.24"
 $nssmUrl = "https://nssm.cc/release/nssm-$nssmVersion.zip"
 
+# Resolve target version (if "latest", fetch from GitHub API)
+$targetVersion = $Version
+if ($Version -eq "latest") {
+    Write-Info "Resolving latest version..."
+    try {
+        $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/r-wa/adno-agent/releases/latest" -UseBasicParsing
+        $targetVersion = $latestRelease.tag_name -replace '^agent-v', ''
+        Write-Info "Latest version: $targetVersion"
+    } catch {
+        Write-Warn "Warning: Could not resolve latest version: $_"
+        Write-Info "Continuing with download..."
+    }
+}
+
+# Check installed version
+$installedVersion = Get-InstalledVersion -InstallDir $InstallDir
+if ($installedVersion) {
+    Write-Info "Installed version: $installedVersion"
+    $comparison = Compare-Versions -Current $installedVersion -Target $targetVersion
+
+    if ($comparison -eq 0) {
+        Write-Success "Version $installedVersion is already installed and up to date!"
+        Write-Info "Skipping download, proceeding to service configuration..."
+        $skipDownload = $true
+    } elseif ($comparison -lt 0) {
+        Write-Info "Upgrading from v$installedVersion to v$targetVersion"
+        $skipDownload = $false
+    } else {
+        Write-Warn "Warning: Downgrading from v$installedVersion to v$targetVersion"
+        $skipDownload = $false
+    }
+} else {
+    Write-Info "No existing installation detected"
+    $skipDownload = $false
+}
+
 # Create installation directory
 Write-Info "Creating installation directory..."
 try {
@@ -79,39 +150,73 @@ try {
     exit 1
 }
 
-# Download binary
+# Download binary and version file (skip if already up to date)
 $binaryPath = Join-Path $InstallDir "adno-agent.exe"
-Write-Info "Downloading agent binary..."
-Write-Info "URL: $downloadUrl"
-try {
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -Uri $downloadUrl -OutFile $binaryPath -UseBasicParsing
-    Write-Success "[OK] Binary downloaded"
-} catch {
-    Write-Fail "Failed to download binary: $_"
-    exit 1
-}
+$versionFilePath = Join-Path $InstallDir "adno-agent.exe.version"
 
-# Download and verify checksum
-Write-Info "Verifying checksum..."
-try {
-    $checksumResponse = Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing
-    $expectedHash = [System.Text.Encoding]::UTF8.GetString($checksumResponse.Content).Trim()
-    $actualHash = (Get-FileHash -Path $binaryPath -Algorithm SHA256).Hash
+if (-not $skipDownload) {
+    # Stop service before replacing binary (if it exists and is running)
+    $serviceName = "AdnoAgent"
+    $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+    if ($existingService -and $existingService.Status -eq "Running") {
+        Write-Info "Stopping service before file replacement..."
+        Stop-Service -Name $serviceName -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }
 
-    if ($actualHash -eq $expectedHash) {
-        Write-Success "[OK] Checksum verified"
-    } else {
-        Write-Fail "Checksum mismatch!"
-        Write-Fail "Expected: $expectedHash"
-        Write-Fail "Actual: $actualHash"
-        Write-Warn "Removing potentially corrupted file..."
-        Remove-Item $binaryPath -Force
+    Write-Info "Downloading agent binary..."
+    Write-Info "URL: $downloadUrl"
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $binaryPath -UseBasicParsing
+        Write-Success "[OK] Binary downloaded"
+    } catch {
+        Write-Fail "Failed to download binary: $_"
         exit 1
     }
-} catch {
-    Write-Warn "Warning: Could not verify checksum: $_"
-    Write-Warn "Continuing anyway (use at your own risk)..."
+
+    # Download and verify checksum
+    Write-Info "Verifying checksum..."
+    try {
+        $checksumResponse = Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing
+        $expectedHash = [System.Text.Encoding]::UTF8.GetString($checksumResponse.Content).Trim()
+        $actualHash = (Get-FileHash -Path $binaryPath -Algorithm SHA256).Hash
+
+        if ($actualHash -eq $expectedHash) {
+            Write-Success "[OK] Checksum verified"
+        } else {
+            Write-Fail "Checksum mismatch!"
+            Write-Fail "Expected: $expectedHash"
+            Write-Fail "Actual: $actualHash"
+            Write-Warn "Removing potentially corrupted file..."
+            Remove-Item $binaryPath -Force
+            exit 1
+        }
+    } catch {
+        Write-Warn "Warning: Could not verify checksum: $_"
+        Write-Warn "Continuing anyway (use at your own risk)..."
+    }
+
+    # Download version file for future version checks
+    Write-Info "Downloading version metadata..."
+    try {
+        $versionUrl = if ($Version -eq "latest") {
+            "https://github.com/r-wa/adno-agent/releases/latest/download/$binaryName.version"
+        } else {
+            "https://github.com/r-wa/adno-agent/releases/download/$Version/$binaryName.version"
+        }
+        Invoke-WebRequest -Uri $versionUrl -OutFile $versionFilePath -UseBasicParsing
+        Write-Success "[OK] Version metadata downloaded"
+    } catch {
+        Write-Warn "Warning: Could not download version file: $_"
+        # Create version file manually if download fails
+        if ($targetVersion) {
+            $targetVersion | Out-File -FilePath $versionFilePath -Encoding ASCII -NoNewline
+            Write-Info "Created version file manually"
+        }
+    }
+} else {
+    Write-Info "Using existing binary at: $binaryPath"
 }
 
 # Download and extract NSSM
