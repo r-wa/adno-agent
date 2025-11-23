@@ -17,6 +17,7 @@ export interface TaskContext {
   workspaceId: string
   agentId: string
   workspaceConfig: WorkspaceConfigResponse | null
+  signal?: AbortSignal  // Cancellation signal for graceful shutdown
 }
 
 /**
@@ -54,7 +55,7 @@ export class TaskExecutor {
   /**
    * Execute a task using the appropriate handler
    */
-  async execute(task: AgentTask): Promise<Record<string, any>> {
+  async execute(task: AgentTask, signal?: AbortSignal): Promise<Record<string, any>> {
     logger.info('Executing task', { taskId: task.id, type: task.type })
 
     const handler = this.handlers.get(task.type)
@@ -62,7 +63,12 @@ export class TaskExecutor {
       throw new Error(`No handler registered for task type: ${task.type}`)
     }
 
-    const context = this.getTaskContext()
+    const context = this.getTaskContext(signal)
+
+    // Check if already cancelled before starting
+    if (signal?.aborted) {
+      throw new Error('Task cancelled before execution')
+    }
 
     try {
       const result = await handler.execute(task, context)
@@ -72,6 +78,15 @@ export class TaskExecutor {
       })
       return result
     } catch (error: any) {
+      // Check if error was due to cancellation
+      if (signal?.aborted) {
+        logger.warn('Task execution cancelled', {
+          taskId: task.id,
+          type: task.type,
+        })
+        throw new Error('Task execution cancelled')
+      }
+
       logger.error('Task execution failed', {
         taskId: task.id,
         type: task.type,
@@ -84,15 +99,24 @@ export class TaskExecutor {
   /**
    * Get task context for handlers
    */
-  private getTaskContext(): TaskContext {
+  private getTaskContext(signal?: AbortSignal): TaskContext {
     const workspaceContext = this.apiClient.getWorkspaceContext()
+
+    // Validate workspace context is properly initialized
+    if (!workspaceContext.workspaceId) {
+      throw new Error('Workspace ID not available. Ensure agent is authenticated before executing tasks.')
+    }
+    if (!workspaceContext.agentId) {
+      throw new Error('Agent ID not available. Ensure agent is authenticated before executing tasks.')
+    }
 
     return {
       config: this.config,
       apiClient: this.apiClient,
-      workspaceId: workspaceContext.workspaceId!,
-      agentId: workspaceContext.agentId!,
+      workspaceId: workspaceContext.workspaceId,
+      agentId: workspaceContext.agentId,
       workspaceConfig: this.workspaceConfig,
+      signal,
     }
   }
 

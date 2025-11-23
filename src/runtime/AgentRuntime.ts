@@ -1,7 +1,6 @@
 import type { AgentConfig } from '../config'
 import { BackendApiClient, type AgentTask, type AgentConfigResponse, type WorkspaceConfigResponse } from '../api/BackendApiClient'
 import { TaskExecutor } from './TaskExecutor'
-import { HealthCheckServer } from './HealthCheckServer'
 import { VersionChecker } from '../version/VersionChecker'
 import { logger } from '../utils/logger'
 
@@ -12,7 +11,6 @@ export class AgentRuntime {
   private config: AgentConfig
   private apiClient: BackendApiClient
   private taskExecutor: TaskExecutor
-  private healthCheckServer: HealthCheckServer
   private versionChecker: VersionChecker
 
   private isRunning: boolean = false
@@ -26,12 +24,23 @@ export class AgentRuntime {
   private workspaceConfig: WorkspaceConfigResponse | null = null
   private activeTasks: Set<string> = new Set()
 
+  // Exponential backoff state for polling failures
+  private consecutivePollingFailures: number = 0
+  private currentPollingIntervalMs: number = 0
+
+  // Stuck detection timestamps
+  private lastPollTime: number = 0
+  private lastHeartbeatTime: number = 0
+
+  // Task cancellation controllers
+  private activeTaskControllers: Map<string, AbortController> = new Map()
+
   constructor(config: AgentConfig) {
     this.config = config
     this.apiClient = new BackendApiClient(config)
     this.taskExecutor = new TaskExecutor(config, this.apiClient)
-    this.healthCheckServer = new HealthCheckServer(config)
     this.versionChecker = new VersionChecker(config)
+    this.currentPollingIntervalMs = config.pollIntervalMs
   }
 
   /**
@@ -66,10 +75,7 @@ export class AgentRuntime {
       })
       logger.info('Agent_starting signal sent', { success: startingSignalSent })
 
-      // 5. Start health check server
-      await this.healthCheckServer.start(this.getHealthStatus.bind(this))
-
-      // 6. Start periodic tasks
+      // 5. Start periodic tasks
       this.isRunning = true
       this.startHeartbeat()
       this.startConfigPolling()
@@ -107,7 +113,14 @@ export class AgentRuntime {
       clearInterval(this.taskPollInterval)
     }
 
-    // 3. Wait for active tasks to complete (with timeout)
+    // 3. Signal active tasks to cancel gracefully
+    logger.info(`Signalling ${this.activeTaskControllers.size} active tasks to cancel...`)
+    for (const [taskId, controller] of this.activeTaskControllers.entries()) {
+      logger.debug('Aborting task', { taskId })
+      controller.abort()
+    }
+
+    // 4. Wait for active tasks to complete (with timeout)
     const SHUTDOWN_TIMEOUT = 30000 // 30 seconds
     const startTime = Date.now()
 
@@ -117,10 +130,12 @@ export class AgentRuntime {
     }
 
     if (this.activeTasks.size > 0) {
-      logger.warn(`Shutdown timeout reached with ${this.activeTasks.size} tasks still active`)
+      logger.warn(`Shutdown timeout reached with ${this.activeTasks.size} tasks still active`, {
+        taskIds: Array.from(this.activeTasks),
+      })
     }
 
-    // 4. Send agent_stopping signal
+    // 5. Send agent_stopping signal
     await this.apiClient.sendSignal({
       type: 'agent_stopping',
       message: 'Agent shutting down',
@@ -128,9 +143,6 @@ export class AgentRuntime {
         activeTasks: this.activeTasks.size,
       },
     })
-
-    // 5. Stop health check server
-    await this.healthCheckServer.stop()
 
     logger.info('Agent runtime stopped')
   }
@@ -251,10 +263,55 @@ export class AgentRuntime {
       if (this.isRunning && !this.isShuttingDown) {
         await this.pollAndExecuteTasks()
       }
-    }, this.config.pollIntervalMs)
+    }, this.currentPollingIntervalMs)
 
     // Poll immediately
     this.pollAndExecuteTasks()
+  }
+
+  /**
+   * Restart task polling with exponential backoff on failures
+   */
+  private restartTaskPollingWithBackoff(): void {
+    // Clear existing interval
+    if (this.taskPollInterval) {
+      clearInterval(this.taskPollInterval)
+    }
+
+    // Calculate backoff delay: base * 2^failures, max 5 minutes
+    const baseDelay = this.config.pollIntervalMs
+    const maxDelay = 300000 // 5 minutes
+    const backoffDelay = Math.min(baseDelay * Math.pow(2, this.consecutivePollingFailures), maxDelay)
+
+    this.currentPollingIntervalMs = backoffDelay
+
+    logger.warn('Restarting task polling with exponential backoff', {
+      consecutiveFailures: this.consecutivePollingFailures,
+      baseDelayMs: baseDelay,
+      backoffDelayMs: backoffDelay,
+    })
+
+    // Restart polling with new interval
+    this.startTaskPolling()
+  }
+
+  /**
+   * Reset task polling to normal interval after successful poll
+   */
+  private resetTaskPollingInterval(): void {
+    if (this.currentPollingIntervalMs !== this.config.pollIntervalMs) {
+      logger.info('Resetting task polling to normal interval', {
+        intervalMs: this.config.pollIntervalMs,
+      })
+
+      this.currentPollingIntervalMs = this.config.pollIntervalMs
+
+      // Restart polling with normal interval
+      if (this.taskPollInterval) {
+        clearInterval(this.taskPollInterval)
+      }
+      this.startTaskPolling()
+    }
   }
 
   /**
@@ -274,6 +331,9 @@ export class AgentRuntime {
         },
       })
       logger.info('Heartbeat sent', { success: sent })
+
+      // Update heartbeat timestamp for stuck detection
+      this.lastHeartbeatTime = Date.now()
     } catch (error) {
       logger.error('Failed to send heartbeat', { error })
     }
@@ -283,6 +343,9 @@ export class AgentRuntime {
    * Poll for tasks and execute them
    */
   private async pollAndExecuteTasks(): Promise<void> {
+    // Update poll timestamp for stuck detection
+    this.lastPollTime = Date.now()
+
     try {
       // Check if we have capacity for more tasks
       const availableSlots = this.config.maxConcurrentTasks - this.activeTasks.size
@@ -291,6 +354,11 @@ export class AgentRuntime {
           active: this.activeTasks.size,
           max: this.config.maxConcurrentTasks,
         })
+        // Reset failure count even when at capacity (successful connection)
+        if (this.consecutivePollingFailures > 0) {
+          this.consecutivePollingFailures = 0
+          this.resetTaskPollingInterval()
+        }
         return
       }
 
@@ -299,21 +367,30 @@ export class AgentRuntime {
 
       if (tasks.length === 0) {
         logger.debug('No pending tasks')
-        return
+      } else {
+        logger.info(`Found ${tasks.length} pending tasks`, {
+          availableSlots,
+          tasks: tasks.map(t => ({ id: t.id, type: t.type })),
+        })
+
+        // Execute tasks in parallel (up to available slots)
+        const tasksToExecute = tasks.slice(0, availableSlots)
+        await Promise.allSettled(
+          tasksToExecute.map(task => this.executeTask(task))
+        )
       }
 
-      logger.info(`Found ${tasks.length} pending tasks`, {
-        availableSlots,
-        tasks: tasks.map(t => ({ id: t.id, type: t.type })),
-      })
-
-      // Execute tasks in parallel (up to available slots)
-      const tasksToExecute = tasks.slice(0, availableSlots)
-      await Promise.allSettled(
-        tasksToExecute.map(task => this.executeTask(task))
-      )
+      // Successful poll - reset failure count and interval
+      if (this.consecutivePollingFailures > 0) {
+        this.consecutivePollingFailures = 0
+        this.resetTaskPollingInterval()
+      }
     } catch (error) {
       logger.error('Error in task polling', { error })
+
+      // Increment failure count and apply exponential backoff
+      this.consecutivePollingFailures++
+      this.restartTaskPollingWithBackoff()
     }
   }
 
@@ -323,6 +400,9 @@ export class AgentRuntime {
   private async executeTask(task: AgentTask): Promise<void> {
     logger.info('Executing task', { taskId: task.id, type: task.type })
 
+    // Create abort controller for graceful cancellation
+    const abortController = new AbortController()
+
     try {
       // Claim the task
       const claimedTask = await this.apiClient.claimTask(task.id)
@@ -331,8 +411,9 @@ export class AgentRuntime {
         return
       }
 
-      // Add to active tasks
+      // Add to active tasks and track controller
       this.activeTasks.add(task.id)
+      this.activeTaskControllers.set(task.id, abortController)
 
       // Send task_started signal
       await this.apiClient.sendSignal({
@@ -343,8 +424,15 @@ export class AgentRuntime {
         },
       })
 
-      // Execute the task
-      const result = await this.taskExecutor.execute(claimedTask)
+      // Execute the task with abort signal
+      const result = await this.taskExecutor.execute(claimedTask, abortController.signal)
+
+      // Check if cancelled during execution
+      if (abortController.signal.aborted) {
+        logger.warn('Task was cancelled during execution', { taskId: task.id })
+        await this.apiClient.failTask(task.id, 'Task cancelled during shutdown', false)
+        return
+      }
 
       // Mark as complete
       await this.apiClient.completeTask(task.id, result)
@@ -361,6 +449,16 @@ export class AgentRuntime {
 
       logger.info('Task completed successfully', { taskId: task.id, type: task.type })
     } catch (error: any) {
+      // Check if error was due to cancellation
+      if (abortController.signal.aborted) {
+        logger.warn('Task execution cancelled', {
+          taskId: task.id,
+          type: task.type,
+        })
+        await this.apiClient.failTask(task.id, 'Task cancelled during shutdown', false)
+        return
+      }
+
       logger.error('Task execution failed', {
         taskId: task.id,
         type: task.type,
@@ -383,28 +481,10 @@ export class AgentRuntime {
         },
       })
     } finally {
-      // Remove from active tasks
+      // Remove from active tasks and controllers
       this.activeTasks.delete(task.id)
+      this.activeTaskControllers.delete(task.id)
     }
   }
 
-  /**
-   * Get health status for health check endpoint
-   */
-  private getHealthStatus() {
-    const context = this.apiClient.getWorkspaceContext()
-
-    return {
-      status: this.isRunning && !this.isShuttingDown ? 'healthy' : 'unhealthy',
-      workspaceId: context.workspaceId,
-      workspaceName: context.workspaceName,
-      agentId: context.agentId,
-      activeTasks: this.activeTasks.size,
-      maxConcurrentTasks: this.config.maxConcurrentTasks,
-      configVersion: this.backendConfig?.version || null,
-      uptime: process.uptime(),
-      memory: process.memoryUsage(),
-      timestamp: new Date().toISOString(),
-    }
-  }
 }

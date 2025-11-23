@@ -7,37 +7,41 @@
     "adno-agent": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc && tsc-alias",
+    "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "type-check": "tsc --noEmit",
     "package": "pkg dist/index.js --targets node18-win-x64 --output adno-agent-windows-x64.exe"
   },
   "pkg": {
-    "targets": ["node18-win-x64"],
-    "outputPath": "dist",
-    "assets": [
-      "node_modules/axios/**/*",
-      "node_modules/node-fetch/**/*"
-    ]
+    "targets": [
+      "node18-win-x64"
+    ],
+    "outputPath": "dist"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/r-wa/adno-agent"
   },
-  "keywords": ["adno", "agent", "automation", "background-worker"],
+  "keywords": [
+    "adno",
+    "agent",
+    "automation",
+    "background-worker"
+  ],
   "author": "Ryan W",
   "license": "MIT",
   "dependencies": {
-    "axios": "^1.6.0",
-    "dotenv": "^16.3.1",
-    "node-fetch": "^3.3.2"
+    "dotenv": "^16.4.7",
+    "pino": "^8.21.0",
+    "rotating-file-stream": "^3.2.5"
   },
   "devDependencies": {
-    "@types/node": "^20.10.0",
-    "tsx": "^4.7.0",
-    "typescript": "^5.3.0",
-    "tsc-alias": "^1.8.10"
+    "@types/node": "^20.17.11",
+    "pino-pretty": "^10.3.1",
+    "pkg": "^5.8.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
   },
   "engines": {
     "node": ">=18.0.0"

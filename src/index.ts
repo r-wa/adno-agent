@@ -3,10 +3,10 @@
 // IMPORTANT: Load environment variables BEFORE any other imports
 // This ensures dotenv runs before logger and other modules try to read process.env
 import dotenv from 'dotenv'
-dotenv.config()
+dotenv.config({ override: true })
 
 import { AgentRuntime } from './runtime/AgentRuntime'
-import { loadConfig } from './config'
+import { loadConfig, validateConfig } from './config'
 import { logger } from './utils/logger'
 
 /**
@@ -19,18 +19,15 @@ async function main() {
     // Load configuration from environment
     const config = loadConfig()
 
-    // Validate required configuration
-    if (!config.apiKey) {
-      logger.error('ADNO_API_KEY is required')
+    // Validate configuration
+    const validation = validateConfig(config)
+    if (!validation.valid) {
+      logger.error('Configuration validation failed')
+      validation.errors.forEach(error => logger.error(`  - ${error}`))
       process.exit(1)
     }
 
-    if (!config.apiUrl) {
-      logger.error('ADNO_API_URL is required')
-      process.exit(1)
-    }
-
-    logger.info('Configuration loaded successfully', {
+    logger.info('Configuration loaded and validated successfully', {
       apiUrl: config.apiUrl,
       pollIntervalMs: config.pollIntervalMs,
       maxConcurrentTasks: config.maxConcurrentTasks,

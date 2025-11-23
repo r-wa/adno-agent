@@ -1,7 +1,7 @@
 import dotenv from 'dotenv'
 
-// Load environment variables from .env file
-dotenv.config()
+// Load environment variables from .env file (override existing env vars)
+dotenv.config({ override: true })
 
 export interface AgentConfig {
   // API Configuration
@@ -12,7 +12,6 @@ export interface AgentConfig {
   pollIntervalMs: number
   heartbeatIntervalMs: number
   maxConcurrentTasks: number
-  healthCheckPort: number
 
   // Azure DevOps Configuration
   adoOrganization?: string
@@ -43,7 +42,6 @@ export function loadConfig(): AgentConfig {
     pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || '30000', 10),
     heartbeatIntervalMs: parseInt(process.env.HEARTBEAT_INTERVAL_MS || '60000', 10),
     maxConcurrentTasks: parseInt(process.env.MAX_CONCURRENT_TASKS || '3', 10),
-    healthCheckPort: parseInt(process.env.HEALTH_PORT || '3001', 10),
 
     // Azure DevOps (optional - can be configured in backend)
     adoOrganization: process.env.ADO_ORGANIZATION,

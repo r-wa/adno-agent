@@ -1,7 +1,9 @@
-import axios from 'axios'
 import type { TaskHandler, TaskContext } from '../runtime/TaskExecutor'
 import type { AgentTask } from '../api/BackendApiClient'
 import { logger } from '../utils/logger'
+import { http } from '../utils/fetch-helper'
+import { createAuthenticatedClient } from '../utils/authenticated-http'
+import { createHash } from 'crypto'
 
 interface Candidate {
   id: string
@@ -108,16 +110,8 @@ export class ClaritySuggestionHandler implements TaskHandler {
    * Fetch candidate from backend
    */
   private async fetchCandidate(context: TaskContext, candidateId: string): Promise<Candidate> {
-    const response = await axios.get(
-      `${context.config.apiUrl}/api/agent/candidates/${candidateId}`,
-      {
-        headers: {
-          'Authorization': `Bearer ${context.config.apiKey}`,
-        },
-      }
-    )
-
-    return response.data
+    const client = createAuthenticatedClient(context)
+    return await client.get<Candidate>(`/api/agent/candidates/${candidateId}`)
   }
 
   /**
@@ -136,7 +130,7 @@ export class ClaritySuggestionHandler implements TaskHandler {
 
     const url = `${config.endpoint}/openai/deployments/${config.deployment}/chat/completions?api-version=${config.apiVersion}`
 
-    const response = await axios.post(
+    const response = await http.post<any>(
       url,
       {
         messages: [
@@ -161,7 +155,7 @@ export class ClaritySuggestionHandler implements TaskHandler {
       }
     )
 
-    const content = response.data.choices[0].message.content
+    const content = response.choices[0].message.content
     const report = JSON.parse(content) as ClarityReport
 
     return report
@@ -208,18 +202,11 @@ Respond ONLY with valid JSON.
 
   /**
    * Calculate hash of candidate content for change detection
+   * Uses SHA-256 for reliable collision detection
    */
   private hashCandidate(candidate: Candidate): string {
     const content = `${candidate.title}|${candidate.description}|${candidate.acceptance_criteria}`
-
-    // Simple hash function (in production, use crypto.createHash)
-    let hash = 0
-    for (let i = 0; i < content.length; i++) {
-      const char = content.charCodeAt(i)
-      hash = ((hash << 5) - hash) + char
-      hash = hash & hash // Convert to 32bit integer
-    }
-    return hash.toString(16)
+    return createHash('sha256').update(content).digest('hex')
   }
 
   /**
@@ -231,19 +218,14 @@ Respond ONLY with valid JSON.
     report: ClarityReport,
     hash: string
   ): Promise<void> {
-    await axios.post(
-      `${context.config.apiUrl}/api/agent/clarity/report`,
+    const client = createAuthenticatedClient(context)
+    await client.post(
+      `/api/agent/clarity/report`,
       {
         candidate_id: candidateId,
         report,
         hash,
         tokens_used: 0, // Would track actual token usage
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${context.config.apiKey}`,
-          'Content-Type': 'application/json',
-        },
       }
     )
   }

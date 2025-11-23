@@ -1,7 +1,8 @@
-import axios from 'axios'
 import type { TaskHandler, TaskContext } from '../runtime/TaskExecutor'
 import type { AgentTask } from '../api/BackendApiClient'
 import { logger } from '../utils/logger'
+import { http } from '../utils/fetch-helper'
+import { createAuthenticatedClient } from '../utils/authenticated-http'
 
 interface AdoWorkItem {
   id: number
@@ -115,7 +116,7 @@ export class AdoSyncHandler implements TaskHandler {
       `,
     }
 
-    const wiqlResponse = await axios.post(
+    const wiqlResponse = await http.post<any>(
       `${baseUrl}/wit/wiql?api-version=7.0`,
       wiqlQuery,
       {
@@ -126,7 +127,7 @@ export class AdoSyncHandler implements TaskHandler {
       }
     )
 
-    const workItemRefs = wiqlResponse.data.workItems || []
+    const workItemRefs = wiqlResponse.workItems || []
     if (workItemRefs.length === 0) {
       return []
     }
@@ -154,7 +155,7 @@ export class AdoSyncHandler implements TaskHandler {
         'System.CreatedDate',  // For tracking creation
       ].join(',')
 
-      const detailsResponse = await axios.get(
+      const detailsResponse = await http.get<{ value: AdoWorkItem[] }>(
         `${baseUrl}/wit/workitems?ids=${idsParam}&fields=${fieldsParam}&api-version=7.0`,
         {
           headers: {
@@ -163,7 +164,7 @@ export class AdoSyncHandler implements TaskHandler {
         }
       )
 
-      allWorkItems.push(...(detailsResponse.data.value || []))
+      allWorkItems.push(...(detailsResponse.value || []))
     }
 
     return allWorkItems
@@ -221,24 +222,15 @@ export class AdoSyncHandler implements TaskHandler {
     candidates: any[],
     syncRunId?: string
   ): Promise<{ imported: number; updated: number; skipped: number }> {
-    // This would call a backend API endpoint
-    // For now, we'll use a placeholder
-    const apiUrl = context.config.apiUrl
-
-    const response = await axios.post(
-      `${apiUrl}/api/agent/candidates/upsert`,
+    const client = createAuthenticatedClient(context)
+    const response = await client.post<{ imported: number; updated: number; skipped: number }>(
+      `/api/agent/candidates/upsert`,
       {
         candidates,
         sync_run_id: syncRunId,
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${context.config.apiKey}`,
-          'Content-Type': 'application/json',
-        },
       }
     )
 
-    return response.data
+    return response
   }
 }

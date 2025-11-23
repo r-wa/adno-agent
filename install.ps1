@@ -1,4 +1,4 @@
-# adno Agent Installer for Windows
+﻿# adno Agent Installer for Windows
 # Downloads and installs the latest adno agent as a Windows service
 #
 # Usage:
@@ -9,6 +9,8 @@
 #   -ApiUrl       (Optional) adno server URL (default: https://app.adno.dev)
 #   -Version      (Optional) Specific version to install (default: latest)
 #   -InstallDir   (Optional) Installation directory (default: C:\Program Files\adno Agent)
+#   -LocalBinary  (Optional) Path to local binary for development testing
+#   -Force        (Optional) Force reinstall/reconfigure even if already up to date
 
 param(
     [Parameter(Mandatory=$false, HelpMessage="Your adno agent API key")]
@@ -21,16 +23,44 @@ param(
     [string]$Version = "latest",
 
     [Parameter(Mandatory=$false)]
-    [string]$InstallDir = "$env:ProgramFiles\adno Agent"
+    [string]$InstallDir = "$env:ProgramFiles\adno Agent",
+
+    [Parameter(Mandatory=$false, HelpMessage="Path to local binary (for development)")]
+    [string]$LocalBinary,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
 
-# Colors for output
-function Write-Success { param([string]$Message) Write-Host $Message -ForegroundColor Green }
-function Write-Info { param([string]$Message) Write-Host $Message -ForegroundColor Cyan }
-function Write-Warn { param([string]$Message) Write-Host $Message -ForegroundColor Yellow }
-function Write-Fail { param([string]$Message) Write-Host $Message -ForegroundColor Red }
+# Structured logging with timestamps
+function Get-Timestamp { return (Get-Date).ToString("HH:mm:ss") }
+
+function Write-Success {
+    param([string]$Message)
+    Write-Host "[$(Get-Timestamp)] $Message" -ForegroundColor Green
+}
+
+function Write-Info {
+    param([string]$Message)
+    Write-Host "[$(Get-Timestamp)] $Message" -ForegroundColor Cyan
+}
+
+function Write-Warn {
+    param([string]$Message)
+    Write-Host "[$(Get-Timestamp)] $Message" -ForegroundColor Yellow
+}
+
+function Write-Fail {
+    param([string]$Message)
+    Write-Host "[$(Get-Timestamp)] $Message" -ForegroundColor Red
+}
+
+function Write-Log {
+    param([string]$Message)
+    Write-Host "[$(Get-Timestamp)] $Message" -ForegroundColor Gray
+}
 
 # Helper function: Get installed version
 function Get-InstalledVersion {
@@ -53,6 +83,14 @@ function Compare-Versions {
     if (-not $Current) { return -1 }
     if (-not $Target) { return 1 }
 
+    # Dev versions (dev-YYYYMMDD-HHMMSS) are always considered different/newer
+    # This forces reinstall prompts when testing local builds
+    if ($Current -match '^dev-' -or $Target -match '^dev-') {
+        if ($Current -eq $Target) { return 0 }
+        return -1  # Treat as "current is older" to trigger update flow
+    }
+
+    # Parse semantic versions (e.g., "1.0.3")
     $currentParts = $Current.Split('.')
     $targetParts = $Target.Split('.')
 
@@ -76,16 +114,16 @@ function Get-ValidatedApiKey {
     while ($attempt -lt $maxAttempts) {
         Write-Host ""
         Write-Host "API Key" -ForegroundColor Cyan
-        Write-Host "━━━━━━━" -ForegroundColor DarkGray
+        Write-Host "-------" -ForegroundColor DarkGray
         if ($attempt -eq 0) {
             Write-Host "Generate one at: $ApiUrl/settings/api-keys" -ForegroundColor Gray
-            Write-Host "Format: agnt_ followed by 40 hex characters" -ForegroundColor Gray
+            Write-Host "Format: agnt_ followed by 32 hex characters" -ForegroundColor Gray
             Write-Host ""
         }
 
         $apiKey = Read-Host "Enter your API key"
 
-        if ($apiKey -match '^agnt_[a-f0-9]{40}$') {
+        if ($apiKey -match '^agnt_[a-f0-9]{32}$') {
             Write-Success "  [OK] API key validated"
             return $apiKey
         }
@@ -95,7 +133,7 @@ function Get-ValidatedApiKey {
         Write-Fail "  [FAIL] Invalid format"
 
         if ($attempt -lt $maxAttempts) {
-            Write-Host "    Expected: agnt_ followed by 40 hex characters (0-9, a-f)" -ForegroundColor Yellow
+            Write-Host '    Expected: agnt_ followed by 32 hex characters (0-9, a-f)' -ForegroundColor Yellow
             Write-Host "    Please try again ($attempt/$maxAttempts)" -ForegroundColor Yellow
         } else {
             Write-Host "    Too many failed attempts. Please check your API key and try again." -ForegroundColor Red
@@ -151,20 +189,26 @@ if (-not $isAdmin) {
 }
 
 # Welcome screen
-Clear-Host
 Write-Host ""
 Write-Host "Adno Agent Installer" -ForegroundColor Cyan
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+Write-Host "-----------------------------------------------------------" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "This will install the workspace agent as a Windows service." -ForegroundColor White
 Write-Host "Estimated time: ~1 minute" -ForegroundColor Gray
 Write-Host ""
-Write-Host "Configuration:" -ForegroundColor Cyan
-Write-Host "  Version:     $Version" -ForegroundColor Gray
-Write-Host "  API URL:     $ApiUrl" -ForegroundColor Gray
-Write-Host "  Install Dir: $InstallDir" -ForegroundColor Gray
+Write-Host "Configuration:" -ForegroundColor White
+Write-Host "  Version:      $Version" -ForegroundColor Gray
+Write-Host "  API URL:      $ApiUrl" -ForegroundColor Gray
+Write-Host "  Install Dir:  $InstallDir" -ForegroundColor Gray
+if ($LocalBinary) {
+    Write-Host "  Local Binary: $LocalBinary" -ForegroundColor Yellow
+    Write-Host "                (DEVELOPMENT MODE)" -ForegroundColor Yellow
+}
+if ($Force) {
+    Write-Host "  Force:        Enabled" -ForegroundColor Yellow
+}
 Write-Host ""
-Write-Host "Press Enter to begin..." -ForegroundColor Gray -NoNewline
+Write-Host "Press Enter to continue..." -ForegroundColor Gray -NoNewline
 Read-Host
 Write-Host ""
 
@@ -189,7 +233,7 @@ if ($Version -eq "latest") {
     try {
         $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/r-wa/adno-agent/releases/latest" -UseBasicParsing
         $targetVersion = $latestRelease.tag_name -replace '^agent-v', ''
-        Write-Host "  Latest version: $targetVersion" -ForegroundColor Gray
+        Write-Log "  Latest version: $targetVersion"
     } catch {
         Write-Warn "  [WARN] Could not resolve latest version: $_"
     }
@@ -198,22 +242,43 @@ if ($Version -eq "latest") {
 # Check installed version
 $installedVersion = Get-InstalledVersion -InstallDir $InstallDir
 if ($installedVersion) {
-    Write-Host "  Installed version: $installedVersion" -ForegroundColor Gray
+    Write-Log "  Installed version: $installedVersion"
     $comparison = Compare-Versions -Current $installedVersion -Target $targetVersion
 
     if ($comparison -eq 0) {
         Write-Success "  [OK] Version $installedVersion is already up to date"
-        Write-Host "  Skipping download, proceeding to service configuration..." -ForegroundColor Gray
+
+        # Check if service is already running (unless Force flag is set)
+        if (-not $Force) {
+            $serviceName = "AdnoAgent"
+            $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+            if ($existingService -and $existingService.Status -eq "Running") {
+                Write-Log "  Service is already running"
+                Write-Host ""
+                Write-Host "-----------------------------------------------------------" -ForegroundColor Green
+                Write-Host "Agent Already Installed" -ForegroundColor Green
+                Write-Host "-----------------------------------------------------------" -ForegroundColor Green
+                Write-Host ""
+                Write-Host "Version $installedVersion is running. No action needed." -ForegroundColor White
+                Write-Host ""
+                Write-Host "To reinstall or reconfigure, run with -Force flag" -ForegroundColor Gray
+                exit 0
+            }
+
+            Write-Log "  Service not running, proceeding with configuration..."
+        } else {
+            Write-Log "  Force flag set, proceeding with reconfiguration..."
+        }
         $skipDownload = $true
     } elseif ($comparison -lt 0) {
-        Write-Host "  Upgrading from v$installedVersion to v$targetVersion" -ForegroundColor Cyan
+        Write-Info "  Upgrading from v$installedVersion to v$targetVersion"
         $skipDownload = $false
     } else {
         Write-Warn "  [WARN] Downgrading from v$installedVersion to v$targetVersion"
         $skipDownload = $false
     }
 } else {
-    Write-Host "  No existing installation detected" -ForegroundColor Gray
+    Write-Log "  No existing installation detected"
     $skipDownload = $false
 }
 
@@ -228,19 +293,67 @@ try {
     exit 1
 }
 
+# Stop and remove existing service if reconfiguring
+$serviceName = "AdnoAgent"
+$existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+if ($existingService) {
+    Write-Host ""
+    Write-Info "Removing existing service for reconfiguration..."
+    try {
+        # Stop service if running or paused
+        if ($existingService.Status -ne "Stopped") {
+            Write-Log "  Stopping service (current status: $($existingService.Status))..."
+            Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+        }
+
+        # Kill any remaining processes
+        $agentProcess = Get-Process -Name "adno-agent" -ErrorAction SilentlyContinue
+        if ($agentProcess) {
+            Write-Log "  Terminating agent process..."
+            $agentProcess | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+        }
+
+        # Remove service
+        $nssmPath = Join-Path $InstallDir "nssm.exe"
+        if (Test-Path $nssmPath) {
+            Write-Log "  Removing service..."
+            & $nssmPath remove $serviceName confirm 2>&1 | Out-Null
+            Start-Sleep -Seconds 2
+        }
+
+        Write-Success "  [OK] Existing service removed"
+    } catch {
+        Write-Warn "  [WARN] Could not fully remove existing service: $_"
+    }
+}
+
 # Download binary and version file (skip if already up to date)
 $binaryPath = Join-Path $InstallDir "adno-agent.exe"
 $versionFilePath = Join-Path $InstallDir "adno-agent.exe.version"
 
-if (-not $skipDownload) {
-    # Stop service before replacing binary (if it exists and is running)
-    $serviceName = "AdnoAgent"
-    $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-    if ($existingService -and $existingService.Status -eq "Running") {
-        Write-Host "  Stopping existing service..." -ForegroundColor Gray
-        Stop-Service -Name $serviceName -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
+# Developer mode: Use local binary if provided
+if ($LocalBinary) {
+    Write-Host ""
+    Write-Info "Using local binary for development testing..."
+
+    if (-not (Test-Path $LocalBinary)) {
+        Write-Fail "  [FAIL] Local binary not found: $LocalBinary"
+        exit 1
     }
+
+    try {
+        Copy-Item $LocalBinary $binaryPath -Force
+        $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        "dev-$timestamp" | Out-File $versionFilePath -NoNewline -Encoding ASCII
+        Write-Success "  [OK] Local binary installed (version: dev-$timestamp)"
+    } catch {
+        Write-Fail "  [FAIL] Failed to copy local binary: $_"
+        exit 1
+    }
+}
+elseif (-not $skipDownload) {
 
     Write-Host ""
     Write-Info "Downloading agent binary..."
@@ -322,12 +435,21 @@ if (!(Test-Path $nssmPath)) {
 }
 
 # Prompt for API key if not provided
-if (-not $ApiKey) {
-    Write-Host ""
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
-    Write-Host "Configuration" -ForegroundColor Cyan
-    Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "Configuration" -ForegroundColor Cyan
+Write-Host "-----------------------------------------------------------" -ForegroundColor DarkGray
+
+if (-not $ApiKey -or [string]::IsNullOrWhiteSpace($ApiKey)) {
     $ApiKey = Get-ValidatedApiKey -ApiUrl $ApiUrl
+} else {
+    Write-Log "  Using API key from parameter"
+}
+
+# Ensure we have an API key before proceeding
+if (-not $ApiKey -or [string]::IsNullOrWhiteSpace($ApiKey)) {
+    Write-Host ""
+    Write-Fail "  [FAIL] API key is required"
+    exit 1
 }
 
 # Configure environment variables
@@ -412,32 +534,44 @@ Write-Host ""
 Write-Info "Starting agent..."
 try {
     & $nssmPath start $serviceName 2>&1 | Out-Null
-    Write-Host "  Waiting for service to start (this may take up to 30 seconds)..." -ForegroundColor Gray
+    Write-Log "  Waiting for service to start (this may take up to 30 seconds)..."
     Start-Sleep -Seconds 5
 
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     if ($service -and $service.Status -eq "Running") {
+        $installedVersion = Get-InstalledVersion -InstallDir $InstallDir
         Write-Host ""
-        Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Green
-        Write-Host "[OK] Installation Complete!" -ForegroundColor Green
-        Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Green
+        Write-Host "-----------------------------------------------------------" -ForegroundColor Green
+        Write-Host "Installation Complete" -ForegroundColor Green
+        Write-Host "-----------------------------------------------------------" -ForegroundColor Green
         Write-Host ""
         Write-Host "Your agent is now running as a Windows service." -ForegroundColor White
         Write-Host ""
-        Write-Host "Next: Verify agent status" -ForegroundColor Cyan
-        Write-Host "  → Open: $ApiUrl/settings/agents" -ForegroundColor Gray
-        Write-Host "  → You should see your agent listed as 'Online'" -ForegroundColor Gray
-        Write-Host "  → Pending tasks will begin processing automatically" -ForegroundColor Gray
+        Write-Host "Installation Summary:" -ForegroundColor White
+        Write-Host "  Binary:      $binaryPath" -ForegroundColor Gray
+        Write-Host "  Version:     $installedVersion" -ForegroundColor Gray
+        if ($LocalBinary) {
+            Write-Host "  Source:      Local binary (development mode)" -ForegroundColor Yellow
+            Write-Host "               Original: $LocalBinary" -ForegroundColor DarkGray
+        } else {
+            Write-Host "  Source:      GitHub release" -ForegroundColor Gray
+        }
+        Write-Host "  Logs:        $logDir" -ForegroundColor Gray
         Write-Host ""
-        Write-Host "Logs: $logDir" -ForegroundColor DarkGray
+        Write-Host "Next Steps:" -ForegroundColor White
+        Write-Host "  1. Open: $ApiUrl/settings/agents" -ForegroundColor Gray
+        Write-Host "  2. Verify your agent is listed as 'Online'" -ForegroundColor Gray
+        Write-Host "  3. Pending tasks will begin processing automatically" -ForegroundColor Gray
+        Write-Host ""
     } else {
         Write-Host ""
-        Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Red
-        Write-Host "[FAIL] Installation Failed" -ForegroundColor Red
-        Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Red
+        Write-Host "-----------------------------------------------------------" -ForegroundColor Red
+        Write-Host "Installation Failed" -ForegroundColor Red
+        Write-Host "-----------------------------------------------------------" -ForegroundColor Red
         Write-Host ""
         Write-Host "Service status: $($service.Status)" -ForegroundColor Yellow
         Write-Host "Check logs: $logDir\agent-error.log" -ForegroundColor Yellow
+        Write-Host ""
     }
 } catch {
     Write-Host ""

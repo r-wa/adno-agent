@@ -1,7 +1,7 @@
-import axios from 'axios'
 import type { TaskHandler, TaskContext } from '../runtime/TaskExecutor'
 import type { AgentTask } from '../api/BackendApiClient'
 import { logger } from '../utils/logger'
+import { createAuthenticatedClient } from '../utils/authenticated-http'
 
 interface Vote {
   id: string
@@ -78,32 +78,17 @@ export class ConsensusEvaluationHandler implements TaskHandler {
    * Fetch candidate from backend
    */
   private async fetchCandidate(context: TaskContext, candidateId: string): Promise<any> {
-    const response = await axios.get(
-      `${context.config.apiUrl}/api/agent/candidates/${candidateId}`,
-      {
-        headers: {
-          'Authorization': `Bearer ${context.config.apiKey}`,
-        },
-      }
-    )
-
-    return response.data
+    const client = createAuthenticatedClient(context)
+    return await client.get(`/api/agent/candidates/${candidateId}`)
   }
 
   /**
    * Fetch votes for a candidate from backend
    */
   private async fetchVotes(context: TaskContext, candidateId: string): Promise<Vote[]> {
-    const response = await axios.get(
-      `${context.config.apiUrl}/api/agent/candidates/${candidateId}/votes`,
-      {
-        headers: {
-          'Authorization': `Bearer ${context.config.apiKey}`,
-        },
-      }
-    )
-
-    return response.data.votes || []
+    const client = createAuthenticatedClient(context)
+    const data = await client.get<{ votes: Vote[] }>(`/api/agent/candidates/${candidateId}/votes`)
+    return data.votes || []
   }
 
   /**
@@ -119,20 +104,15 @@ export class ConsensusEvaluationHandler implements TaskHandler {
       noVoters: string[]
     }
   ): Promise<void> {
-    await axios.post(
-      `${context.config.apiUrl}/api/agent/consensus/result`,
+    const client = createAuthenticatedClient(context)
+    await client.post(
+      `/api/agent/consensus/result`,
       {
         candidate_id: result.candidateId,
         consensus_reached: result.consensusReached,
         approval_count: result.approvalCount,
         yes_voters: result.yesVoters,
         no_voters: result.noVoters,
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${context.config.apiKey}`,
-          'Content-Type': 'application/json',
-        },
       }
     )
   }

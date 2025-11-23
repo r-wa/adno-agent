@@ -177,8 +177,7 @@ adno-agent/
 │   │   └── BackendApiClient.ts  # API client for adno backend
 │   ├── runtime/
 │   │   ├── AgentRuntime.ts      # Main agent runtime
-│   │   ├── TaskExecutor.ts      # Task execution engine
-│   │   └── HealthCheckServer.ts # Health check HTTP server
+│   │   └── TaskExecutor.ts      # Task execution engine
 │   ├── tasks/
 │   │   ├── AdoSyncHandler.ts             # Azure DevOps sync
 │   │   ├── ClaritySuggestionHandler.ts   # AI suggestions

@@ -1,70 +1,177 @@
 /**
- * Simple structured logger for the agent
+ * Production-grade structured logger using Pino
+ * Provides compatibility wrapper for the old logger API
  */
+import pino from 'pino'
+import { createStream } from 'rotating-file-stream'
+import * as path from 'path'
 
-type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+// Determine log level from environment
+const logLevel = (process.env.LOG_LEVEL as pino.Level) || 'info'
 
-interface LogEntry {
-  timestamp: string
-  level: LogLevel
-  message: string
-  data?: any
-}
+// Detect if running inside pkg bundle or production environment
+// process.pkg is defined when code runs inside a pkg-bundled executable
+const isPkgBundle = (process as any).pkg !== undefined
+const isProduction = process.env.NODE_ENV === 'production'
 
-class Logger {
-  private logLevel: LogLevel = 'info'
-  private logFormat: 'json' | 'text' = 'json'
+// Check if file logging is requested
+const logFilePath = process.env.LOG_FILE
 
-  constructor() {
-    this.logLevel = (process.env.LOG_LEVEL as LogLevel) || 'info'
-    this.logFormat = (process.env.LOG_FORMAT as any) || 'json'
+// Only use pino-pretty transport in development (not in pkg bundles)
+// pkg cannot bundle Worker Thread-based transports correctly
+const usePrettyPrint = !isPkgBundle && !isProduction && process.env.LOG_FORMAT !== 'json' && !logFilePath
+
+/**
+ * Create rotating file stream for production logging
+ */
+function createRotatingFileStream() {
+  if (!logFilePath) {
+    return undefined
   }
 
-  private shouldLog(level: LogLevel): boolean {
-    const levels: LogLevel[] = ['debug', 'info', 'warn', 'error']
-    return levels.indexOf(level) >= levels.indexOf(this.logLevel)
-  }
+  try {
+    const logDir = path.dirname(logFilePath)
+    const logFileName = path.basename(logFilePath)
 
-  private formatLog(level: LogLevel, message: string, data?: any): string {
-    const entry: LogEntry = {
-      timestamp: new Date().toISOString(),
-      level,
-      message,
-      data,
-    }
+    // Create rotating stream with daily rotation and max 10 files
+    const stream = createStream(logFileName, {
+      path: logDir,
+      size: '10M',          // Rotate every 10MB
+      interval: '1d',       // Rotate daily
+      maxFiles: 10,         // Keep max 10 files
+      compress: 'gzip',     // Compress rotated files
+    })
 
-    if (this.logFormat === 'json') {
-      return JSON.stringify(entry)
-    }
-
-    // Text format
-    const dataStr = data ? ` ${JSON.stringify(data)}` : ''
-    return `[${entry.timestamp}] ${level.toUpperCase()}: ${message}${dataStr}`
-  }
-
-  debug(message: string, data?: any) {
-    if (this.shouldLog('debug')) {
-      console.debug(this.formatLog('debug', message, data))
-    }
-  }
-
-  info(message: string, data?: any) {
-    if (this.shouldLog('info')) {
-      console.info(this.formatLog('info', message, data))
-    }
-  }
-
-  warn(message: string, data?: any) {
-    if (this.shouldLog('warn')) {
-      console.warn(this.formatLog('warn', message, data))
-    }
-  }
-
-  error(message: string, data?: any) {
-    if (this.shouldLog('error')) {
-      console.error(this.formatLog('error', message, data))
-    }
+    console.log(`[Logger] File logging enabled: ${logFilePath}`)
+    return stream
+  } catch (error: any) {
+    console.warn(`[Logger] Failed to create rotating file stream: ${error.message}`)
+    return undefined
   }
 }
 
-export const logger = new Logger()
+/**
+ * Create pino logger with graceful fallback
+ * If logger initialization fails, falls back to basic JSON logging
+ */
+function createLogger(): pino.Logger {
+  const fileStream = createRotatingFileStream()
+
+  try {
+    const baseConfig = {
+      level: logLevel,
+
+      // Base configuration
+      base: {
+        pid: process.pid,
+        hostname: process.env.COMPUTERNAME || process.env.HOSTNAME || 'unknown',
+      },
+
+      // Timestamp configuration - readable format
+      timestamp: () => {
+        const now = new Date()
+        const hours = now.getHours().toString().padStart(2, '0')
+        const minutes = now.getMinutes().toString().padStart(2, '0')
+        const seconds = now.getSeconds().toString().padStart(2, '0')
+        const ms = now.getMilliseconds().toString().padStart(3, '0')
+        return `,"time":"${hours}:${minutes}:${seconds}.${ms}"`
+      },
+    }
+
+    // If file logging is enabled, use file stream
+    if (fileStream) {
+      return pino(baseConfig, fileStream)
+    }
+
+    // If pretty print is enabled, use pino-pretty transport
+    if (usePrettyPrint) {
+      return pino({
+        ...baseConfig,
+        transport: {
+          target: 'pino-pretty',
+          options: {
+            colorize: true,
+            translateTime: 'HH:MM:ss.l',
+            ignore: 'pid,hostname',
+            singleLine: false,
+          },
+        },
+      })
+    }
+
+    // Default: JSON output to stdout
+    return pino(baseConfig)
+  } catch (error: any) {
+    // Fallback to basic pino logger without transport
+    console.warn('[Logger] Failed to initialize with transport, falling back to JSON output:', error.message)
+
+    return pino({
+      level: logLevel,
+      base: {
+        pid: process.pid,
+        hostname: process.env.COMPUTERNAME || process.env.HOSTNAME || 'unknown',
+      },
+      timestamp: () => {
+        const now = new Date()
+        const hours = now.getHours().toString().padStart(2, '0')
+        const minutes = now.getMinutes().toString().padStart(2, '0')
+        const seconds = now.getSeconds().toString().padStart(2, '0')
+        const ms = now.getMilliseconds().toString().padStart(3, '0')
+        return `,"time":"${hours}:${minutes}:${seconds}.${ms}"`
+      },
+      // No transport - pure JSON output
+    })
+  }
+}
+
+// Create the logger instance
+const pinoLogger = createLogger()
+
+/**
+ * Compatibility wrapper for the old logger API
+ * Supports both old API (message, data) and pino API (data, message)
+ */
+export const logger = {
+  debug(messageOrData: string | object, dataOrMessage?: object | string) {
+    if (typeof messageOrData === 'string') {
+      // Old API: logger.debug('message', { data })
+      pinoLogger.debug(dataOrMessage || {}, messageOrData)
+    } else {
+      // Pino API: logger.debug({ data }, 'message')
+      pinoLogger.debug(messageOrData, dataOrMessage as string)
+    }
+  },
+
+  info(messageOrData: string | object, dataOrMessage?: object | string) {
+    if (typeof messageOrData === 'string') {
+      // Old API: logger.info('message', { data })
+      pinoLogger.info(dataOrMessage || {}, messageOrData)
+    } else {
+      // Pino API: logger.info({ data }, 'message')
+      pinoLogger.info(messageOrData, dataOrMessage as string)
+    }
+  },
+
+  warn(messageOrData: string | object, dataOrMessage?: object | string) {
+    if (typeof messageOrData === 'string') {
+      // Old API: logger.warn('message', { data })
+      pinoLogger.warn(dataOrMessage || {}, messageOrData)
+    } else {
+      // Pino API: logger.warn({ data }, 'message')
+      pinoLogger.warn(messageOrData, dataOrMessage as string)
+    }
+  },
+
+  error(messageOrData: string | object, dataOrMessage?: object | string) {
+    if (typeof messageOrData === 'string') {
+      // Old API: logger.error('message', { data })
+      pinoLogger.error(dataOrMessage || {}, messageOrData)
+    } else {
+      // Pino API: logger.error({ data }, 'message')
+      pinoLogger.error(messageOrData, dataOrMessage as string)
+    }
+  },
+}
+
+// Export default for compatibility
+export default logger
