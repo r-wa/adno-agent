@@ -225,10 +225,10 @@ Write-Detail "Target" $ApiUrl
 Write-Detail "Installation" $InstallDir
 Write-Detail "Version" $(Format-Version $Version)
 if ($LocalBinary) {
-    Write-Warn "Development mode (using local binary)"
+    Write-Detail "Mode" "Development (local binary)"
 }
 if ($Force) {
-    Write-Warn "Force reinstall enabled"
+    Write-Detail "Force" "Enabled"
 }
 Write-Host ""
 
