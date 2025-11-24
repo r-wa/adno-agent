@@ -25,7 +25,7 @@ Set-EncodingUTF8
 Show-Banner -Title "Agent Installation"
 
 # Load environment configuration
-$envFile = Load-EnvFile -Path (Join-Path (Split-Path $PSScriptRoot) ".env")
+$envFile = Import-EnvFile -Path (Join-Path (Split-Path $PSScriptRoot) ".env")
 
 # Get configuration values with precedence
 $config = @{
@@ -87,7 +87,7 @@ if ($LocalBinary) {
     }
 
     $tempBinary = Join-Path $env:TEMP "adno-agent.exe"
-    $downloaded = Download-Binary `
+    $downloaded = Receive-Binary `
         -Url $release.DownloadUrl `
         -OutputPath $tempBinary `
         -ExpectedSize $release.Size

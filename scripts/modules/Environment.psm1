@@ -3,8 +3,8 @@
 
 Import-Module (Join-Path $PSScriptRoot "Constants.psm1") -Force
 
-# Load environment variables from .env file
-function Load-EnvFile {
+# Import environment variables from .env file
+function Import-EnvFile {
     param(
         [string]$Path = ".env",
         [switch]$OverrideExisting
@@ -87,8 +87,8 @@ function Get-ConfigValue {
     return $null
 }
 
-# Save environment variables to .env file
-function Save-EnvFile {
+# Export environment variables to .env file
+function Export-EnvFile {
     param(
         [string]$Path = ".env",
         [hashtable]$Variables
@@ -111,7 +111,7 @@ function Save-EnvFile {
 }
 
 # Merge multiple configuration sources
-function Merge-ConfigSources {
+function Merge-Configuration {
     param(
         [hashtable]$CmdArgs = @{},
         [hashtable]$EnvFile = @{},
@@ -155,5 +155,5 @@ function Get-AgentEnvironment {
     }
 }
 
-Export-ModuleMember -Function Load-EnvFile, Get-ConfigValue, Save-EnvFile, `
-                              Merge-ConfigSources, Get-AgentEnvironment
+Export-ModuleMember -Function Import-EnvFile, Get-ConfigValue, Export-EnvFile, `
+                              Merge-Configuration, Get-AgentEnvironment

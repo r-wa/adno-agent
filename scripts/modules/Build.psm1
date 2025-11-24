@@ -33,8 +33,8 @@ function Build-TypeScript {
     }
 }
 
-# Package executable
-function Package-Executable {
+# Create executable package
+function New-Executable {
     param(
         [string]$WorkingDirectory = (Get-Location),
         [string]$OutputName = "adno-agent-windows-x64.exe"
@@ -112,8 +112,8 @@ function Get-LatestRelease {
     }
 }
 
-# Download binary from URL
-function Download-Binary {
+# Receive binary from URL
+function Receive-Binary {
     param(
         [string]$Url,
         [string]$OutputPath,
@@ -175,7 +175,7 @@ function Build-FromSource {
         }
 
         # Package
-        $executable = Package-Executable -WorkingDirectory $SourceDirectory
+        $executable = New-Executable -WorkingDirectory $SourceDirectory
         if (!$executable) {
             throw "Package failed"
         }
@@ -189,8 +189,8 @@ function Build-FromSource {
     }
 }
 
-# Clean build artifacts
-function Clean-BuildArtifacts {
+# Clear build artifacts
+function Clear-BuildArtifacts {
     param([string]$WorkingDirectory = (Get-Location))
 
     Write-Status "Cleaning build artifacts..."
@@ -221,5 +221,5 @@ function Clean-BuildArtifacts {
     }
 }
 
-Export-ModuleMember -Function Build-TypeScript, Package-Executable, Get-LatestRelease, `
-                              Download-Binary, Build-FromSource, Clean-BuildArtifacts
+Export-ModuleMember -Function Build-TypeScript, New-Executable, Get-LatestRelease, `
+                              Receive-Binary, Build-FromSource, Clear-BuildArtifacts

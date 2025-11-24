@@ -51,15 +51,18 @@ function Stop-ServiceSafely {
     } catch {
         Write-Error "Failed to stop service: $_"
 
-        # Force kill processes if normal stop fails
-        Kill-ServiceProcesses -ServiceName $ServiceName
+        # Force stop processes if normal stop fails
+        Stop-ServiceProcess -ServiceName $ServiceName -Force
         return $false
     }
 }
 
-# Kill service processes forcefully
-function Kill-ServiceProcesses {
-    param([string]$ServiceName = $Script:ServiceConfig.Name)
+# Stop service processes forcefully
+function Stop-ServiceProcess {
+    param(
+        [string]$ServiceName = $Script:ServiceConfig.Name,
+        [switch]$Force
+    )
 
     Write-Status "Checking for running processes..."
 
@@ -232,5 +235,5 @@ function Wait-ForServiceState {
 }
 
 Export-ModuleMember -Function Test-ServiceExists, Get-ServiceStatus, Stop-ServiceSafely, `
-                              Kill-ServiceProcesses, Remove-Service, Install-ServiceWithNSSM, `
+                              Stop-ServiceProcess, Remove-Service, Install-ServiceWithNSSM, `
                               Set-ServiceLogging, Start-ServiceManaged, Wait-ForServiceState

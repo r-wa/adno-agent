@@ -19,7 +19,7 @@ $agentDir = Split-Path $PSScriptRoot
 Set-Location $agentDir
 
 # Load environment configuration
-$envFile = Load-EnvFile -Path (Join-Path $agentDir ".env")
+$envFile = Import-EnvFile -Path (Join-Path $agentDir ".env")
 
 # Get configuration from .env
 $config = @{
@@ -39,7 +39,7 @@ if (!(Build-TypeScript -WorkingDirectory $agentDir)) {
 Write-Host ""
 
 # Package executable
-$binaryPath = Package-Executable -WorkingDirectory $agentDir
+$binaryPath = New-Executable -WorkingDirectory $agentDir
 if (!$binaryPath) {
     Write-Error "Package failed"
     exit 1
