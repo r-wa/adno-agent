@@ -3,14 +3,15 @@
 
 $ErrorActionPreference = "Stop"
 
+# Set UTF-8 encoding
+$OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 # Import modules
 $ModulePath = Join-Path $PSScriptRoot "modules"
-Import-Module (Join-Path $ModulePath "UI.psm1") -Force
-Import-Module (Join-Path $ModulePath "Service.psm1") -Force
-Import-Module (Join-Path $ModulePath "Validation.psm1") -Force
-
-# Initialize
-Set-EncodingUTF8
+Import-Module (Join-Path $ModulePath "UI.psm1") -Force -DisableNameChecking
+Import-Module (Join-Path $ModulePath "Service.psm1") -Force -DisableNameChecking
+Import-Module (Join-Path $ModulePath "Validation.psm1") -Force -DisableNameChecking
 Show-Banner -Title "Service Cleanup"
 
 # Check if running as administrator
