@@ -34,14 +34,36 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Set UTF-8 encoding for proper symbol display
+$OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 function Write-Success {
     param([string]$Message)
     Write-Host "✓ $Message" -ForegroundColor Green
 }
 
+function Write-Status {
+    param([string]$Message)
+    Write-Host "○ $Message" -ForegroundColor Cyan
+}
+
+function Write-Detail {
+    param(
+        [string]$Key,
+        [string]$Value = ""
+    )
+    if ($Value) {
+        $padding = " " * [Math]::Max(0, 20 - $Key.Length)
+        Write-Host "  - ${Key}:${padding}$Value" -ForegroundColor Gray
+    } else {
+        Write-Host "  - $Key" -ForegroundColor Gray
+    }
+}
+
 function Write-Info {
     param([string]$Message)
-    Write-Host "  $Message" -ForegroundColor Cyan
+    Write-Host "$Message" -ForegroundColor White
 }
 
 function Write-Warn {
@@ -52,7 +74,21 @@ function Write-Warn {
 function Write-Fail {
     param([string]$Message)
     $timestamp = (Get-Date).ToString("HH:mm:ss")
-    Write-Host "✗ [$timestamp] $Message" -ForegroundColor Red
+    Write-Host "⨯ [$timestamp] $Message" -ForegroundColor Red
+}
+
+function Format-Version {
+    param([string]$Version)
+    if ([string]::IsNullOrEmpty($Version)) {
+        return ""
+    }
+
+    $clean = $Version -replace '^v', ''
+
+    if ($clean -match '^(latest|dev-)') {
+        return $clean
+    }
+    return "v$clean"
 }
 
 # Helper function: Get installed version
@@ -183,15 +219,16 @@ if (-not $isAdmin) {
 
 # Welcome screen
 Write-Host ""
-Write-Host "adno Agent Installer" -ForegroundColor Cyan
+Write-Info "adno Agent Installer"
 Write-Host ""
-Write-Info "Installing v$Version to $InstallDir"
-Write-Info "Target: $ApiUrl"
+Write-Detail "Target" $ApiUrl
+Write-Detail "Installation" $InstallDir
+Write-Detail "Version" $(Format-Version $Version)
 if ($LocalBinary) {
-    Write-Warn "Development mode (local binary: $LocalBinary)"
+    Write-Warn "Development mode (using local binary)"
 }
 if ($Force) {
-    Write-Info "Force reinstall enabled"
+    Write-Warn "Force reinstall enabled"
 }
 Write-Host ""
 
@@ -212,11 +249,11 @@ $nssmUrl = "https://nssm.cc/release/nssm-$nssmVersion.zip"
 # Resolve target version (if "latest", fetch from GitHub API)
 $targetVersion = $Version
 if ($Version -eq "latest") {
-    Write-Info "Resolving latest version..."
+    Write-Status "Resolving latest version..."
     try {
         $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/r-wa/adno-agent/releases/latest" -UseBasicParsing
         $targetVersion = $latestRelease.tag_name -replace '^agent-v', ''
-        Write-Info "Latest version: $targetVersion"
+        Write-Detail "Latest" $(Format-Version $targetVersion)
     } catch {
         Write-Warn "Could not resolve latest version: $_"
     }
@@ -225,61 +262,62 @@ if ($Version -eq "latest") {
 # Check installed version
 $installedVersion = Get-InstalledVersion -InstallDir $InstallDir
 if ($installedVersion) {
-    Write-Info "Installed version: $installedVersion"
+    Write-Detail "Installed" $(Format-Version $installedVersion)
     $comparison = Compare-Versions -Current $installedVersion -Target $targetVersion
 
     if ($comparison -eq 0) {
-        Write-Success "Version $installedVersion is already up to date"
+        Write-Success "Version resolved"
 
         # Check if service is already running (unless Force flag is set)
         if (-not $Force) {
             $serviceName = "AdnoAgent"
             $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
             if ($existingService -and $existingService.Status -eq "Running") {
-                Write-Success "Agent already installed (version $installedVersion)"
+                Write-Host ""
+                Write-Success "Agent already installed ($(Format-Version $installedVersion))"
                 Write-Host ""
                 Write-Host "To reinstall or reconfigure, run with -Force flag" -ForegroundColor Gray
                 exit 0
             }
 
-            Write-Info "Service not running, proceeding with configuration..."
-        } else {
-            Write-Info "Force flag set, proceeding with reconfiguration..."
+            Write-Detail "Status" "Service not running"
         }
         $skipDownload = $true
     } elseif ($comparison -lt 0) {
-        Write-Info "Upgrading from v$installedVersion to v$targetVersion"
+        Write-Detail "Action" "Upgrade"
+        Write-Success "Version resolved"
         $skipDownload = $false
     } else {
-        Write-Warn "Downgrading from v$installedVersion to v$targetVersion"
+        Write-Detail "Action" "Downgrade"
+        Write-Warn "Downgrading version"
         $skipDownload = $false
     }
 } else {
-    Write-Info "No existing installation detected"
+    Write-Success "Version resolved"
     $skipDownload = $false
 }
+Write-Host ""
 
 # Create installation directory
-Write-Host ""
-Write-Info "Preparing installation..."
+Write-Status "Preparing installation..."
 try {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    Write-Success "Created installation directory"
+    Write-Success "Installation directory ready"
 } catch {
     Write-Fail "Failed to create directory: $_"
     exit 1
 }
+Write-Host ""
 
 # Stop and remove existing service if reconfiguring
 $serviceName = "AdnoAgent"
 $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 if ($existingService) {
-    Write-Host ""
-    Write-Info "Removing existing service for reconfiguration..."
+    Write-Status "Removing existing service..."
     try {
         # Stop service if running or paused
         if ($existingService.Status -ne "Stopped") {
-            Write-Info "Stopping service (current status: $($existingService.Status))..."
+            Write-Detail "Stopping service (status: $($existingService.Status))"
             Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
             Start-Sleep -Seconds 3
         }
@@ -287,7 +325,7 @@ if ($existingService) {
         # Kill any remaining processes
         $agentProcess = Get-Process -Name "adno-agent" -ErrorAction SilentlyContinue
         if ($agentProcess) {
-            Write-Info "Terminating agent process..."
+            Write-Detail "Terminating process"
             $agentProcess | Stop-Process -Force -ErrorAction SilentlyContinue
             Start-Sleep -Seconds 2
         }
@@ -295,15 +333,16 @@ if ($existingService) {
         # Remove service
         $nssmPath = Join-Path $InstallDir "nssm.exe"
         if (Test-Path $nssmPath) {
-            Write-Info "Removing service..."
+            Write-Detail "Removing registration"
             & $nssmPath remove $serviceName confirm 2>&1 | Out-Null
             Start-Sleep -Seconds 2
         }
 
-        Write-Success "Removed existing service"
+        Write-Success "Service removed"
     } catch {
         Write-Warn "Could not fully remove existing service: $_"
     }
+    Write-Host ""
 }
 
 # Download binary and version file (skip if already up to date)
@@ -312,8 +351,7 @@ $versionFilePath = Join-Path $InstallDir "adno-agent.exe.version"
 
 # Developer mode: Use local binary if provided
 if ($LocalBinary) {
-    Write-Host ""
-    Write-Info "Using local binary for development testing..."
+    Write-Status "Installing agent binary..."
 
     if (-not (Test-Path $LocalBinary)) {
         Write-Fail "Local binary not found: $LocalBinary"
@@ -324,45 +362,44 @@ if ($LocalBinary) {
         Copy-Item $LocalBinary $binaryPath -Force
         $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
         "dev-$timestamp" | Out-File $versionFilePath -NoNewline -Encoding ASCII
-        Write-Success "Installed local binary (version: dev-$timestamp)"
+        Write-Detail "Source" "Local binary"
+        Write-Detail "Version" "dev-$timestamp"
+        Write-Success "Binary installed"
     } catch {
         Write-Fail "Failed to copy local binary: $_"
         exit 1
     }
+    Write-Host ""
 }
 elseif (-not $skipDownload) {
-
-    Write-Host ""
-    Write-Info "Downloading agent binary..."
+    Write-Status "Downloading agent binary..."
     try {
         Download-WithRetry -Url $downloadUrl -OutFile $binaryPath -Activity "Downloading agent binary"
-        Write-Success "Downloaded agent binary"
+        Write-Success "Download complete"
     } catch {
-        Write-Host ""
         Write-Fail "Download failed: $_"
         exit 1
     }
 
     # Download and verify checksum
-    Write-Host ""
-    Write-Info "Verifying download integrity..."
+    Write-Status "Verifying download integrity..."
     try {
         $checksumResponse = Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing
         $expectedHash = [System.Text.Encoding]::UTF8.GetString($checksumResponse.Content).Trim().Split()[0].ToLower()
         $actualHash = (Get-FileHash -Path $binaryPath -Algorithm SHA256).Hash.ToLower()
 
         if ($actualHash -eq $expectedHash) {
-            Write-Success "Verified SHA256 checksum"
+            Write-Success "Checksum verified"
         } else {
             Write-Fail "Checksum verification failed"
-            Write-Fail "Expected: $expectedHash"
-            Write-Fail "Actual: $actualHash"
+            Write-Detail "Expected" $expectedHash
+            Write-Detail "Actual" $actualHash
             Remove-Item $binaryPath -Force
             exit 1
         }
     } catch {
         Write-Warn "Could not verify checksum"
-        $continue = Read-Host "    Continue anyway? (Y/N)"
+        $continue = Read-Host "  Continue anyway? (Y/N)"
         if ($continue -ne 'Y') {
             Remove-Item $binaryPath -Force
             exit 0
@@ -383,13 +420,13 @@ elseif (-not $skipDownload) {
             $targetVersion | Out-File -FilePath $versionFilePath -Encoding ASCII -NoNewline
         }
     }
+    Write-Host ""
 }
 
 # Download and extract NSSM if not present
 $nssmPath = Join-Path $InstallDir "nssm.exe"
 if (!(Test-Path $nssmPath)) {
-    Write-Host ""
-    Write-Info "Downloading service wrapper..."
+    Write-Status "Downloading service wrapper..."
     $nssmZip = Join-Path $env:TEMP "nssm.zip"
     $nssmExtract = Join-Path $env:TEMP "nssm"
     try {
@@ -403,23 +440,24 @@ if (!(Test-Path $nssmPath)) {
         Remove-Item $nssmZip -Force -ErrorAction SilentlyContinue
         Remove-Item $nssmExtract -Recurse -Force -ErrorAction SilentlyContinue
 
-        Write-Success "Installed service wrapper"
+        Write-Success "Service wrapper installed"
     } catch {
-        Write-Host ""
         Write-Fail "Failed to download service wrapper: $_"
         exit 1
     }
+    Write-Host ""
 }
 
 # Prompt for API key if not provided
-Write-Host ""
-Write-Info "Configuration..."
+Write-Status "Configuration..."
 
 if (-not $ApiKey -or [string]::IsNullOrWhiteSpace($ApiKey)) {
     $ApiKey = Get-ValidatedApiKey -ApiUrl $ApiUrl
 } else {
-    Write-Info "Using API key from parameter"
+    Write-Detail "API key" "Provided via parameter"
 }
+Write-Success "Configuration complete"
+Write-Host ""
 
 # Ensure we have an API key before proceeding
 if (-not $ApiKey -or [string]::IsNullOrWhiteSpace($ApiKey)) {
@@ -483,6 +521,7 @@ if ($existingService) {
 }
 
 # Create Windows service using NSSM
+Write-Status "Configuring service..."
 try {
     # Install the service
     & $nssmPath install $serviceName $binaryPath 2>&1 | Out-Null
@@ -514,46 +553,40 @@ try {
     # Disable file rotation (we handle it ourselves with pino)
     & $nssmPath set $serviceName AppRotateFiles 0 2>&1 | Out-Null
 
-    Write-Success "Configured service"
+    Write-Detail "Display name" "Adno Agent"
+    Write-Detail "Auto-start" "Enabled"
+    Write-Detail "Log directory" $logDir
+    Write-Success "Service configured"
 } catch {
     Write-Fail "Failed to create service: $_"
     exit 1
 }
+Write-Host ""
 
 # Start service
-Write-Host ""
-Write-Info "Starting agent..."
+Write-Status "Starting agent..."
 try {
     & $nssmPath start $serviceName 2>&1 | Out-Null
-    Write-Info "Waiting for service to start..."
     Start-Sleep -Seconds 5
 
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
     if ($service -and $service.Status -eq "Running") {
         $installedVersion = Get-InstalledVersion -InstallDir $InstallDir
+        Write-Success "Agent started"
         Write-Host ""
-        Write-Success "Agent installed and running"
-        Write-Host ""
-        Write-Host "  Binary:  $binaryPath" -ForegroundColor Gray
-        Write-Host "  Version: $installedVersion" -ForegroundColor Gray
-        if ($LocalBinary) {
-            Write-Host "  Source:  Local binary (development)" -ForegroundColor Yellow
-        } else {
-            Write-Host "  Source:  GitHub release" -ForegroundColor Gray
-        }
-        Write-Host "  Logs:    $logDir" -ForegroundColor Gray
+        Write-Detail "Binary" $binaryPath
+        Write-Detail "Version" $(Format-Version $installedVersion)
+        Write-Detail "Logs" $logDir
         Write-Host ""
         Write-Host "  → Open $ApiUrl/settings/agents to verify" -ForegroundColor Cyan
         Write-Host ""
     } else {
-        Write-Host ""
         Write-Fail "Installation failed - Service status: $($service.Status)"
         Write-Host ""
         Write-Host "Check logs: $logDir\agent-error.log" -ForegroundColor Yellow
         Write-Host ""
     }
 } catch {
-    Write-Host ""
     Write-Fail "Failed to start service: $_"
     Write-Host ""
     Write-Host "The service was installed but could not start." -ForegroundColor Yellow
