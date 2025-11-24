@@ -1,11 +1,6 @@
 # Agent.ps1
 # Agent lifecycle management
 
-Import-Module (Join-Path $PSScriptRoot "Constants.ps1") -Force -DisableNameChecking
-Import-Module (Join-Path $PSScriptRoot "UI.ps1") -Force -DisableNameChecking
-Import-Module (Join-Path $PSScriptRoot "Service.ps1") -Force -DisableNameChecking
-Import-Module (Join-Path $PSScriptRoot "Environment.ps1") -Force -DisableNameChecking
-
 # Test API connection
 function Test-ApiConnection {
     param(

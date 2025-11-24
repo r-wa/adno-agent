@@ -1,9 +1,6 @@
 # Service.ps1
 # Windows service management operations
 
-Import-Module (Join-Path $PSScriptRoot "Constants.ps1") -Force -DisableNameChecking
-Import-Module (Join-Path $PSScriptRoot "UI.ps1") -Force -DisableNameChecking
-
 # Check if service exists
 function Test-ServiceExists {
     param([string]$ServiceName = $Script:ServiceConfig.Name)

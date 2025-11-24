@@ -1,9 +1,6 @@
 # UI.ps1
 # Display and formatting functions
 
-# Import constants for symbols
-Import-Module (Join-Path $PSScriptRoot "Constants.ps1") -Force -DisableNameChecking
-
 # Set UTF-8 encoding for proper symbol display
 function Set-EncodingUTF8 {
     $OutputEncoding = [System.Text.Encoding]::UTF8

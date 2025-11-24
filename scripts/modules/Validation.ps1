@@ -1,8 +1,6 @@
 # Validation.ps1
 # Input validation and prerequisites checking
 
-Import-Module (Join-Path $PSScriptRoot "UI.ps1") -Force -DisableNameChecking
-
 # Validate API key format
 function Test-ApiKey {
     param([string]$ApiKey)

@@ -1,9 +1,6 @@
 # Build.ps1
 # Build and packaging operations
 
-Import-Module (Join-Path $PSScriptRoot "Constants.ps1") -Force -DisableNameChecking
-Import-Module (Join-Path $PSScriptRoot "UI.ps1") -Force -DisableNameChecking
-
 # Build TypeScript project
 function Build-TypeScript {
     param([string]$WorkingDirectory = (Get-Location))
