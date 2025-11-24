@@ -18,8 +18,12 @@ $ModulePath = Join-Path $PSScriptRoot "modules"
 Show-Banner -Title "Agent Reinstall (Development)"
 
 # Navigate to agent directory
-$agentDir = Split-Path $PSScriptRoot
-Set-Location $agentDir
+$agentDir = Split-Path $PSScriptRoot -Parent
+Write-Host ""
+Write-Host "Debug: PSScriptRoot = $PSScriptRoot" -ForegroundColor Yellow
+Write-Host "Debug: agentDir = $agentDir" -ForegroundColor Yellow
+Write-Host "Debug: Current Location = $(Get-Location)" -ForegroundColor Yellow
+Write-Host ""
 
 # Load environment configuration
 $envFile = Import-EnvFile -Path (Join-Path $agentDir ".env")
@@ -34,6 +38,7 @@ $config = @{
 $additionalEnv = Get-AgentEnvironment -EnvFile $envFile
 
 # Build TypeScript
+Write-Host "Debug: About to call Build-TypeScript with WorkingDirectory = $agentDir" -ForegroundColor Yellow
 if (!(Build-TypeScript -WorkingDirectory $agentDir)) {
     Write-Error "Build failed"
     exit 1
