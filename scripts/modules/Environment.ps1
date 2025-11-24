@@ -8,31 +8,48 @@ function Import-EnvFile {
         [switch]$OverrideExisting
     )
 
-    if (!(Test-Path $Path)) {
+    # Return empty hashtable if path is null or empty
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return @{}
+    }
+
+    # Return empty hashtable if file doesn't exist
+    if (!(Test-Path $Path -ErrorAction SilentlyContinue)) {
         return @{}
     }
 
     $envVars = @{}
-    Get-Content $Path | ForEach-Object {
-        $line = $_.Trim()
-        if ($line -and !$line.StartsWith('#')) {
-            if ($line -match '^([^=]+)=(.*)$') {
-                $key = $matches[1].Trim()
-                $value = $matches[2].Trim()
 
-                # Remove surrounding quotes if present
-                if ($value -match '^["''](.*)["'']$') {
-                    $value = $matches[1]
-                }
+    try {
+        $content = Get-Content $Path -ErrorAction Stop
+        if ($null -eq $content) {
+            return @{}
+        }
 
-                $envVars[$key] = $value
+        $content | ForEach-Object {
+            $line = $_.Trim()
+            if ($line -and !$line.StartsWith('#')) {
+                if ($line -match '^([^=]+)=(.*)$') {
+                    $key = $matches[1].Trim()
+                    $value = $matches[2].Trim()
 
-                # Optionally set as environment variable
-                if ($OverrideExisting -or -not $env:PSBoundParameters.ContainsKey($key)) {
-                    Set-Item -Path "env:$key" -Value $value
+                    # Remove surrounding quotes if present
+                    if ($value -match '^["''](.*)["'']$') {
+                        $value = $matches[1]
+                    }
+
+                    $envVars[$key] = $value
+
+                    # Optionally set as environment variable
+                    if ($OverrideExisting -or -not $env:PSBoundParameters.ContainsKey($key)) {
+                        Set-Item -Path "env:$key" -Value $value -ErrorAction SilentlyContinue
+                    }
                 }
             }
         }
+    } catch {
+        # Silently return empty hashtable on any error
+        return @{}
     }
 
     return $envVars

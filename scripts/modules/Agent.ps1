@@ -13,23 +13,15 @@ function Test-ApiConnection {
 
     try {
         $headers = @{
-            "X-API-Key" = $ApiKey
-            "Content-Type" = "application/json"
+            "Authorization" = "Bearer $ApiKey"
         }
 
-        $uri = "$ApiUrl/api/agent/register"
-        $body = @{
-            workerId = "test-connection"
-            agentType = "FETCHER"
-            version = "1.0.0"
-            hostname = $env:COMPUTERNAME
-        } | ConvertTo-Json
+        $uri = "$ApiUrl/api/agent/config"
 
         $response = Invoke-RestMethod `
             -Uri $uri `
-            -Method Post `
+            -Method Get `
             -Headers $headers `
-            -Body $body `
             -TimeoutSec $TimeoutSeconds `
             -ErrorAction Stop
 
