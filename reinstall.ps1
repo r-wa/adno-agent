@@ -20,6 +20,32 @@ Write-Host ""
 $agentDir = "c:\Users\ryanw\source\repos\adno-agent"
 Set-Location $agentDir
 
+# Load .env file for default values
+function Load-EnvFile {
+    param([string]$Path)
+
+    if (!(Test-Path $Path)) {
+        return @{}
+    }
+
+    $env = @{}
+    Get-Content $Path | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -and !$line.StartsWith('#')) {
+            if ($line -match '^([^=]+)=(.*)$') {
+                $key = $matches[1].Trim()
+                $value = $matches[2].Trim()
+                $env[$key] = $value
+            }
+        }
+    }
+    return $env
+}
+
+$envVars = Load-EnvFile (Join-Path $agentDir ".env")
+$apiKey = if ($envVars['ADNO_API_KEY']) { $envVars['ADNO_API_KEY'] } else { Read-Host "Enter API key" }
+$apiUrl = if ($envVars['ADNO_API_URL']) { $envVars['ADNO_API_URL'] } else { "https://app.adno.dev" }
+
 # Build
 Write-Host "$SymbolPending Building TypeScript..." -ForegroundColor Cyan
 npm run build
@@ -42,5 +68,5 @@ if (!(Test-Path $binaryPath)) {
     exit 1
 }
 
-# Run install script with local binary and valid API key
-.\install.ps1 -LocalBinary $binaryPath -ApiKey "agnt_051cee40387d467b1de11ef3488c9a45" -Force
+# Run install script with values from .env
+.\install.ps1 -LocalBinary $binaryPath -ApiKey $apiKey -ApiUrl $apiUrl -Force
