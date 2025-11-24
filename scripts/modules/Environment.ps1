@@ -155,5 +155,3 @@ function Get-AgentEnvironment {
     }
 }
 
-Export-ModuleMember -Function Import-EnvFile, Get-ConfigValue, Export-EnvFile, `
-                              Merge-Configuration, Get-AgentEnvironment

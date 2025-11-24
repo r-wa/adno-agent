@@ -221,5 +221,3 @@ function Clear-BuildArtifacts {
     }
 }
 
-Export-ModuleMember -Function Build-TypeScript, New-Executable, Get-LatestRelease, `
-                              Receive-Binary, Build-FromSource, Clear-BuildArtifacts

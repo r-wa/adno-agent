@@ -86,6 +86,3 @@ function Hide-Progress {
     Write-Progress -Activity " " -Completed
 }
 
-Export-ModuleMember -Function Set-EncodingUTF8, Write-Status, Write-Success, Write-Error, Write-Info, `
-                              Write-Detail, Format-Version, Format-FileSize, Show-Banner, `
-                              Show-Progress, Hide-Progress

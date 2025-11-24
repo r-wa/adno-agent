@@ -50,4 +50,3 @@ $Script:Timeouts = @{
 }
 
 # Export symbols and configuration
-Export-ModuleMember -Variable Symbols, ServiceConfig, Defaults, Paths, GitHub, Timeouts

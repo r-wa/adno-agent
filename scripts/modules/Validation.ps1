@@ -285,6 +285,3 @@ function Test-AllInputs {
     }
 }
 
-Export-ModuleMember -Function Test-ApiKey, Test-ApiUrl, Test-Prerequisites, `
-                              Confirm-UserAction, Test-FilePath, Test-Port, `
-                              Test-AllInputs

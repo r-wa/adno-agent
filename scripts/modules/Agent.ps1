@@ -242,5 +242,3 @@ function Uninstall-Agent {
     return $true
 }
 
-Export-ModuleMember -Function Test-ApiConnection, Install-AgentFiles, Install-NSSM, `
-                              Register-Agent, Verify-Installation, Uninstall-Agent

@@ -234,6 +234,3 @@ function Wait-ForServiceState {
     return $false
 }
 
-Export-ModuleMember -Function Test-ServiceExists, Get-ServiceStatus, Stop-ServiceSafely, `
-                              Stop-ServiceProcess, Remove-Service, Install-ServiceWithNSSM, `
-                              Set-ServiceLogging, Start-ServiceManaged, Wait-ForServiceState
