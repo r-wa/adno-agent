@@ -7,6 +7,11 @@ $ErrorActionPreference = "Stop"
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
+# Define symbols using Unicode code points
+$SymbolPending = [char]0x25CB    # ○
+$SymbolSuccess = [char]0x2713    # ✓
+$SymbolError = [char]0x2A2F      # ⨯
+
 Write-Host ""
 Write-Host "adno Agent Reinstall (Development)" -ForegroundColor White
 Write-Host ""
@@ -16,24 +21,24 @@ $agentDir = "c:\Users\ryanw\source\repos\adno-agent"
 Set-Location $agentDir
 
 # Build
-Write-Host "○ Building TypeScript..." -ForegroundColor Cyan
+Write-Host "$SymbolPending Building TypeScript..." -ForegroundColor Cyan
 npm run build
-Write-Host "✓ Build complete" -ForegroundColor Green
+Write-Host "$SymbolSuccess Build complete" -ForegroundColor Green
 Write-Host ""
 
 # Package
-Write-Host "○ Creating executable..." -ForegroundColor Cyan
+Write-Host "$SymbolPending Creating executable..." -ForegroundColor Cyan
 Remove-Item "adno-agent-windows-x64.exe" -ErrorAction SilentlyContinue
 npm run package
-Write-Host "✓ Package complete" -ForegroundColor Green
+Write-Host "$SymbolSuccess Package complete" -ForegroundColor Green
 Write-Host ""
 
 # Install
-Write-Host "○ Installing service..." -ForegroundColor Cyan
+Write-Host "$SymbolPending Installing service..." -ForegroundColor Cyan
 $binaryPath = Join-Path $agentDir "adno-agent-windows-x64.exe"
 
 if (!(Test-Path $binaryPath)) {
-    Write-Host "⨯ Binary not found at $binaryPath" -ForegroundColor Red
+    Write-Host "$SymbolError Binary not found at $binaryPath" -ForegroundColor Red
     exit 1
 }
 
