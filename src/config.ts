@@ -1,7 +1,6 @@
 import dotenv from 'dotenv'
 
-// Load environment variables from .env file (override existing env vars)
-dotenv.config({ override: true })
+dotenv.config()
 
 export interface AgentConfig {
   // API Configuration

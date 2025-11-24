@@ -61,13 +61,11 @@ function createLogger(): pino.Logger {
     const baseConfig = {
       level: logLevel,
 
-      // Base configuration
       base: {
         pid: process.pid,
         hostname: process.env.COMPUTERNAME || process.env.HOSTNAME || 'unknown',
       },
 
-      // Timestamp configuration - readable format
       timestamp: () => {
         const now = new Date()
         const hours = now.getHours().toString().padStart(2, '0')
@@ -78,12 +76,10 @@ function createLogger(): pino.Logger {
       },
     }
 
-    // If file logging is enabled, use file stream
     if (fileStream) {
       return pino(baseConfig, fileStream)
     }
 
-    // If pretty print is enabled, use pino-pretty transport
     if (usePrettyPrint) {
       return pino({
         ...baseConfig,
@@ -99,10 +95,14 @@ function createLogger(): pino.Logger {
       })
     }
 
-    // Default: JSON output to stdout
-    return pino(baseConfig)
+    // Production/Service mode: split stdout/stderr by log level
+    // Info/debug/warn → stdout (captured by NSSM as agent.log)
+    // Error/fatal → stderr (captured by NSSM as agent-error.log)
+    return pino(baseConfig, pino.multistream([
+      { level: 'trace', stream: process.stdout },
+      { level: 'error', stream: process.stderr },
+    ]))
   } catch (error: any) {
-    // Fallback to basic pino logger without transport
     console.warn('[Logger] Failed to initialize with transport, falling back to JSON output:', error.message)
 
     return pino({
@@ -119,7 +119,6 @@ function createLogger(): pino.Logger {
         const ms = now.getMilliseconds().toString().padStart(3, '0')
         return `,"time":"${hours}:${minutes}:${seconds}.${ms}"`
       },
-      // No transport - pure JSON output
     })
   }
 }

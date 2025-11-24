@@ -1,12 +1,9 @@
 #!/usr/bin/env node
 
-// Suppress experimental fetch warnings (Node 18 compatibility)
 process.removeAllListeners('warning')
 
-// IMPORTANT: Load environment variables BEFORE any other imports
-// This ensures dotenv runs before logger and other modules try to read process.env
 import dotenv from 'dotenv'
-dotenv.config({ override: true })
+dotenv.config()
 
 import { AgentRuntime } from './runtime/AgentRuntime'
 import { loadConfig, validateConfig } from './config'
@@ -56,7 +53,14 @@ async function main() {
     logger.info('Agent started successfully')
   } catch (error) {
     logger.error('Failed to start agent', { error })
-    process.exit(1)
+
+    // Don't exit immediately - Windows services need to stay alive
+    // Log the error and wait indefinitely so NSSM can detect service state
+    logger.error('Agent will remain running but inactive due to startup failure')
+    logger.error('Fix the configuration and restart the service')
+
+    // Keep process alive
+    await new Promise(() => {})
   }
 }
 
