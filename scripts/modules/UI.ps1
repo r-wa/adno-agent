@@ -1,8 +1,8 @@
-# UI.psm1
+# UI.ps1
 # Display and formatting functions
 
 # Import constants for symbols
-Import-Module (Join-Path $PSScriptRoot "Constants.psm1") -Force -DisableNameChecking
+Import-Module (Join-Path $PSScriptRoot "Constants.ps1") -Force -DisableNameChecking
 
 # Set UTF-8 encoding for proper symbol display
 function Set-EncodingUTF8 {

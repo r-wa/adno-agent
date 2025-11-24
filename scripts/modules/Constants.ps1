@@ -1,4 +1,4 @@
-# Constants.psm1
+# Constants.ps1
 # Shared constants and configuration values
 
 # Unicode symbols using code points for cross-platform compatibility

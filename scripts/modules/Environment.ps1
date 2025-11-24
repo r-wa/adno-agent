@@ -1,7 +1,7 @@
-# Environment.psm1
+# Environment.ps1
 # Environment variable and configuration management
 
-Import-Module (Join-Path $PSScriptRoot "Constants.psm1") -Force -DisableNameChecking
+Import-Module (Join-Path $PSScriptRoot "Constants.ps1") -Force -DisableNameChecking
 
 # Import environment variables from .env file
 function Import-EnvFile {

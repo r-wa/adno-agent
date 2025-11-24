@@ -9,12 +9,12 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 # Import modules by dot-sourcing
 $ModulePath = Join-Path $PSScriptRoot "modules"
-. (Join-Path $ModulePath "Constants.psm1")
-. (Join-Path $ModulePath "UI.psm1")
-. (Join-Path $ModulePath "Environment.psm1")
-. (Join-Path $ModulePath "Build.psm1")
-. (Join-Path $ModulePath "Service.psm1")
-. (Join-Path $ModulePath "Agent.psm1")
+. (Join-Path $ModulePath "Constants.ps1")
+. (Join-Path $ModulePath "UI.ps1")
+. (Join-Path $ModulePath "Environment.ps1")
+. (Join-Path $ModulePath "Build.ps1")
+. (Join-Path $ModulePath "Service.ps1")
+. (Join-Path $ModulePath "Agent.ps1")
 Show-Banner -Title "Agent Reinstall (Development)"
 
 # Navigate to agent directory
