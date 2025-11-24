@@ -1,8 +1,8 @@
 # Build.psm1
 # Build and packaging operations
 
-Import-Module (Join-Path $PSScriptRoot "Constants.psm1") -Force
-Import-Module (Join-Path $PSScriptRoot "UI.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "Constants.psm1") -Force -DisableNameChecking
+Import-Module (Join-Path $PSScriptRoot "UI.psm1") -Force -DisableNameChecking
 
 # Build TypeScript project
 function Build-TypeScript {

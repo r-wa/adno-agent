@@ -1,8 +1,8 @@
 # Service.psm1
 # Windows service management operations
 
-Import-Module (Join-Path $PSScriptRoot "Constants.psm1") -Force
-Import-Module (Join-Path $PSScriptRoot "UI.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "Constants.psm1") -Force -DisableNameChecking
+Import-Module (Join-Path $PSScriptRoot "UI.psm1") -Force -DisableNameChecking
 
 # Check if service exists
 function Test-ServiceExists {

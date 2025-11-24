@@ -2,7 +2,7 @@
 # Display and formatting functions
 
 # Import constants for symbols
-Import-Module (Join-Path $PSScriptRoot "Constants.psm1") -Force
+Import-Module (Join-Path $PSScriptRoot "Constants.psm1") -Force -DisableNameChecking
 
 # Set UTF-8 encoding for proper symbol display
 function Set-EncodingUTF8 {
