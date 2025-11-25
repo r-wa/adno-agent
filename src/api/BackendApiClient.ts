@@ -1,10 +1,11 @@
 import type { AgentConfig } from '../config'
 import { logger } from '../utils/logger'
 import { CircuitBreaker, CircuitBreakerOpenError } from '../utils/circuit-breaker'
+import { HttpError, getErrorMessage, getErrorStatus } from '../utils/HttpError'
 
 export interface AgentTask {
   id: string
-  type: 'ado_sync' | 'clarity_suggestion' | 'consensus_evaluation'
+  type: 'FETCHER' | 'SUGGESTION' | 'APPLY' | 'LOGGER' | 'MAINTAIN'
   payload: Record<string, any>
   scheduled_at: string
   priority: number
@@ -19,11 +20,46 @@ export interface VersionInfo {
   should_update: boolean
 }
 
+// Worker settings types - per-worker configuration
+// schedule_interval_ms = how often the worker creates tasks
+export interface FetcherWorkerSettings {
+  enabled: boolean
+  schedule_interval_ms: number  // 1h/8h/24h - how often to sync from ADO
+}
+
+export interface SuggestionWorkerSettings {
+  enabled: boolean
+}
+
+export interface ApplyWorkerSettings {
+  enabled: boolean
+}
+
+export interface LoggerWorkerSettings {
+  enabled: boolean
+  log_level: 'debug' | 'info' | 'warn' | 'error'
+  schedule_interval_ms: number  // 10s/30s/60s - how often to send logs
+}
+
+export interface MaintainWorkerSettings {
+  enabled: boolean
+  retention_days: number
+  schedule_interval_ms: number  // 1h/6h/24h - how often to run cleanup
+}
+
+export interface WorkerSettings {
+  fetcher: FetcherWorkerSettings
+  suggestion: SuggestionWorkerSettings
+  apply: ApplyWorkerSettings
+  logger: LoggerWorkerSettings
+  maintain: MaintainWorkerSettings
+}
+
 export interface AgentConfigResponse {
-  poll_interval_ms: number
   heartbeat_interval_ms: number
-  enabled_task_types: string[]
+  task_poll_interval_ms: number  // How often to poll for tasks (5m/15m/60m)
   max_concurrent_tasks: number
+  workers: WorkerSettings
   limits: {
     max_ado_syncs_per_hour: number
     max_clarity_requests_per_hour: number
@@ -31,6 +67,24 @@ export interface AgentConfigResponse {
   }
   version: string
   version_info?: VersionInfo | null
+}
+
+// Response from GET /api/agent/tasks (includes config piggyback)
+export interface GetTasksResponse {
+  tasks: AgentTask[]
+  config?: AgentConfigResponse | null  // Included when config version changes
+}
+
+// Request to create a task (used by worker schedulers)
+export interface CreateTaskRequest {
+  type: 'fetcher' | 'suggestion' | 'apply' | 'logger' | 'maintain'
+  priority?: 'low' | 'normal' | 'high'
+  payload?: Record<string, any>
+}
+
+export interface CreateTaskResponse {
+  task_id: string
+  status: 'pending' | 'already_pending'
 }
 
 export interface WorkspaceConfigResponse {
@@ -136,19 +190,16 @@ export class BackendApiClient {
 
         if (!response.ok) {
           const errorText = await response.text().catch(() => 'Unknown error')
-          const error: any = new Error(`HTTP ${response.status}: ${errorText}`)
-          error.status = response.status
-          error.response = { status: response.status }
-          throw error
+          throw new HttpError(`HTTP ${response.status}: ${errorText}`, response.status)
         }
 
         const data = await response.json()
         return data as T
-      } catch (error: any) {
+      } catch (error: unknown) {
         logger.error('API Request Error', {
           url: path,
-          message: error.message,
-          status: error.status,
+          message: getErrorMessage(error),
+          status: getErrorStatus(error),
         })
         throw error
       }
@@ -172,10 +223,10 @@ export class BackendApiClient {
       })
 
       return true
-    } catch (error: any) {
+    } catch (error: unknown) {
       logger.error('Authentication failed', {
-        error: error.message,
-        status: error.status,
+        error: getErrorMessage(error),
+        status: getErrorStatus(error),
       })
       return false
     }
@@ -189,8 +240,8 @@ export class BackendApiClient {
       return await withRetry(async () => {
         return await this.request<AgentConfigResponse>('/api/agent/config')
       }, 3, 1000)
-    } catch (error: any) {
-      logger.error('Failed to get config', { error: error.message })
+    } catch (error: unknown) {
+      logger.error('Failed to get config', { error: getErrorMessage(error) })
       return null
     }
   }
@@ -208,8 +259,8 @@ export class BackendApiClient {
         openai_configured: data.config_status?.openai_configured,
       })
       return data
-    } catch (error: any) {
-      logger.error('[BackendApiClient] Failed to get workspace config', { error: error.message })
+    } catch (error: unknown) {
+      logger.error('[BackendApiClient] Failed to get workspace config', { error: getErrorMessage(error) })
       return null
     }
   }
@@ -224,8 +275,8 @@ export class BackendApiClient {
         body: JSON.stringify({ signals }),
       })
       return true
-    } catch (error: any) {
-      logger.error('Failed to send signals', { error: error.message })
+    } catch (error: unknown) {
+      logger.error('Failed to send signals', { error: getErrorMessage(error) })
       return false
     }
   }
@@ -239,16 +290,56 @@ export class BackendApiClient {
 
   /**
    * Get pending tasks from backend
+   * Also returns config if version changed (piggyback pattern)
    */
-  async getTasks(limit: number = 10): Promise<AgentTask[]> {
+  async getTasks(limit: number = 10): Promise<GetTasksResponse> {
+    try {
+      // Include config_version for piggyback - server returns config only if version changed
+      const versionParam = this.configVersion ? `&config_version=${this.configVersion}` : ''
+      const data = await withRetry(async () => {
+        return await this.request<GetTasksResponse>(`/api/agent/tasks?limit=${limit}${versionParam}`)
+      }, 3, 1000)
+
+      // Update config version if new config received
+      if (data.config) {
+        this.configVersion = data.config.version
+        logger.info('Config updated via piggyback', { version: data.config.version })
+      }
+
+      return {
+        tasks: data.tasks || [],
+        config: data.config,
+      }
+    } catch (error: unknown) {
+      logger.error('Failed to get tasks', { error: getErrorMessage(error) })
+      return { tasks: [] }
+    }
+  }
+
+  /**
+   * Create a new task (used by worker schedulers)
+   * Returns 'already_pending' if task with same type already exists
+   */
+  async createTask(request: CreateTaskRequest): Promise<CreateTaskResponse | null> {
     try {
       const data = await withRetry(async () => {
-        return await this.request<{ tasks: AgentTask[] }>(`/api/agent/tasks?limit=${limit}`)
+        return await this.request<CreateTaskResponse>('/api/agent/tasks', {
+          method: 'POST',
+          body: JSON.stringify(request),
+        })
       }, 3, 1000)
-      return data.tasks || []
-    } catch (error: any) {
-      logger.error('Failed to get tasks', { error: error.message })
-      return []
+      logger.debug('Task created', {
+        taskId: data.task_id,
+        status: data.status,
+        type: request.type,
+      })
+      return data
+    } catch (error: unknown) {
+      logger.error('Failed to create task', {
+        type: request.type,
+        error: getErrorMessage(error),
+      })
+      return null
     }
   }
 
@@ -266,8 +357,8 @@ export class BackendApiClient {
         return data.task || null
       }
       return null
-    } catch (error: any) {
-      logger.error('Failed to claim task', { taskId, error: error.message })
+    } catch (error: unknown) {
+      logger.error('Failed to claim task', { taskId, error: getErrorMessage(error) })
       return null
     }
   }
@@ -284,8 +375,8 @@ export class BackendApiClient {
         })
       }, 3, 1000)
       return true
-    } catch (error: any) {
-      logger.error('Failed to complete task', { taskId, error: error.message })
+    } catch (error: unknown) {
+      logger.error('Failed to complete task', { taskId, error: getErrorMessage(error) })
       return false
     }
   }
@@ -302,8 +393,8 @@ export class BackendApiClient {
         })
       }, 3, 1000)
       return true
-    } catch (error: any) {
-      logger.error('Failed to fail task', { taskId, error: error.message })
+    } catch (err: unknown) {
+      logger.error('Failed to fail task', { taskId, error: getErrorMessage(err) })
       return false
     }
   }
@@ -345,23 +436,24 @@ export async function withRetry<T>(
   maxRetries: number = 3,
   backoffMs: number = 1000
 ): Promise<T> {
-  let lastError: Error | null = null
+  let lastError: unknown = null
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       return await fn()
-    } catch (error: any) {
+    } catch (error: unknown) {
       lastError = error
+      const status = getErrorStatus(error)
 
       // Don't retry on 4xx errors (except 429 rate limit)
-      if (error.status >= 400 && error.status < 500 && error.status !== 429) {
+      if (status && status >= 400 && status < 500 && status !== 429) {
         throw error
       }
 
       if (attempt < maxRetries) {
         const delay = backoffMs * Math.pow(2, attempt - 1)
         logger.warn(`Retrying after ${delay}ms (attempt ${attempt}/${maxRetries})`, {
-          error: error.message,
+          error: getErrorMessage(error),
         })
         await new Promise(resolve => setTimeout(resolve, delay))
       }

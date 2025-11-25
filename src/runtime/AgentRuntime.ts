@@ -1,11 +1,19 @@
 import type { AgentConfig } from '../config'
-import { BackendApiClient, type AgentTask, type AgentConfigResponse, type WorkspaceConfigResponse } from '../api/BackendApiClient'
+import { BackendApiClient, type AgentTask, type AgentConfigResponse, type WorkspaceConfigResponse, type WorkerSettings, type CreateTaskRequest } from '../api/BackendApiClient'
 import { TaskExecutor } from './TaskExecutor'
 import { VersionChecker } from '../version/VersionChecker'
-import { logger } from '../utils/logger'
+import { logger, setLogLevel, getLogLevel } from '../utils/logger'
+import { getErrorMessage } from '../utils/HttpError'
+
+type WorkerType = 'fetcher' | 'suggestion' | 'apply' | 'logger' | 'maintain'
 
 /**
  * Main agent runtime that manages task polling, execution, and lifecycle
+ *
+ * Architecture:
+ * - Heartbeat: 30s/60s/2m - Health signals only
+ * - Task Poll: 5m/15m/60m - Check queue + config piggyback
+ * - Worker Schedulers: Per-worker intervals for creating tasks
  */
 export class AgentRuntime {
   private config: AgentConfig
@@ -16,9 +24,10 @@ export class AgentRuntime {
   private isRunning: boolean = false
   private isShuttingDown: boolean = false
 
+  // Separate intervals for different concerns
   private heartbeatInterval: NodeJS.Timeout | null = null
-  private configPollInterval: NodeJS.Timeout | null = null
   private taskPollInterval: NodeJS.Timeout | null = null
+  private workerSchedulers: Map<WorkerType, NodeJS.Timeout> = new Map()
 
   private backendConfig: AgentConfigResponse | null = null
   private workspaceConfig: WorkspaceConfigResponse | null = null
@@ -26,7 +35,7 @@ export class AgentRuntime {
 
   // Exponential backoff state for polling failures
   private consecutivePollingFailures: number = 0
-  private currentPollingIntervalMs: number = 0
+  private currentTaskPollIntervalMs: number = 0
 
   // Stuck detection timestamps
   private lastPollTime: number = 0
@@ -40,7 +49,8 @@ export class AgentRuntime {
     this.apiClient = new BackendApiClient(config)
     this.taskExecutor = new TaskExecutor(config, this.apiClient)
     this.versionChecker = new VersionChecker(config)
-    this.currentPollingIntervalMs = config.pollIntervalMs
+    // Default task poll interval (will be updated from backend config)
+    this.currentTaskPollIntervalMs = 300000 // 5 minutes default
   }
 
   /**
@@ -73,8 +83,8 @@ export class AgentRuntime {
 
       this.isRunning = true
       this.startHeartbeat()
-      this.startConfigPolling()
       this.startTaskPolling()
+      this.startWorkerSchedulers()
 
       logger.info('Agent runtime started successfully')
     } catch (error) {
@@ -99,12 +109,15 @@ export class AgentRuntime {
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval)
     }
-    if (this.configPollInterval) {
-      clearInterval(this.configPollInterval)
-    }
     if (this.taskPollInterval) {
       clearInterval(this.taskPollInterval)
     }
+    // Clear all worker schedulers
+    for (const [workerType, interval] of this.workerSchedulers.entries()) {
+      clearInterval(interval)
+      logger.debug('Stopped worker scheduler', { workerType })
+    }
+    this.workerSchedulers.clear()
 
     logger.info(`Signalling ${this.activeTaskControllers.size} active tasks to cancel...`)
     for (const [taskId, controller] of this.activeTaskControllers.entries()) {
@@ -179,42 +192,127 @@ export class AgentRuntime {
       return
     }
 
+    this.applyConfig(config)
+  }
+
+  /**
+   * Apply configuration changes
+   * Called on startup and when config changes via piggyback
+   */
+  private applyConfig(config: AgentConfigResponse): void {
+    const isInitial = !this.backendConfig
+    const oldConfig = this.backendConfig
     this.backendConfig = config
 
-    logger.info('Configuration loaded', {
+    // Get enabled workers for logging
+    const enabledWorkers = Object.entries(config.workers)
+      .filter(([_, settings]) => settings.enabled)
+      .map(([name]) => name)
+
+    logger.info('Configuration applied', {
       version: config.version,
-      pollIntervalMs: config.poll_interval_ms,
       heartbeatIntervalMs: config.heartbeat_interval_ms,
-      enabledTaskTypes: config.enabled_task_types,
+      taskPollIntervalMs: config.task_poll_interval_ms,
       maxConcurrentTasks: config.max_concurrent_tasks,
+      enabledWorkers,
     })
 
     this.versionChecker.checkVersion(config.version_info)
 
-    this.updateIntervals(config)
+    // Update intervals if changed
+    if (!isInitial) {
+      this.updateIntervals(config, oldConfig)
+      this.updateWorkerSchedulers(config.workers, oldConfig?.workers)
+    }
+
+    this.updateWorkerSettings(config.workers)
   }
 
   /**
    * Update polling intervals based on backend config
    */
-  private updateIntervals(config: AgentConfigResponse): void {
-    if (this.heartbeatInterval && this.config.heartbeatIntervalMs !== config.heartbeat_interval_ms) {
-      clearInterval(this.heartbeatInterval)
+  private updateIntervals(config: AgentConfigResponse, oldConfig: AgentConfigResponse | null): void {
+    // Update heartbeat interval
+    const oldHeartbeat = oldConfig?.heartbeat_interval_ms ?? this.config.heartbeatIntervalMs
+    if (config.heartbeat_interval_ms !== oldHeartbeat) {
+      if (this.heartbeatInterval) {
+        clearInterval(this.heartbeatInterval)
+      }
       this.config.heartbeatIntervalMs = config.heartbeat_interval_ms
       this.startHeartbeat()
       logger.info('Updated heartbeat interval', { intervalMs: config.heartbeat_interval_ms })
     }
 
-    if (this.taskPollInterval && this.config.pollIntervalMs !== config.poll_interval_ms) {
-      clearInterval(this.taskPollInterval)
-      this.config.pollIntervalMs = config.poll_interval_ms
+    // Update task poll interval (global setting)
+    const oldTaskPoll = oldConfig?.task_poll_interval_ms ?? this.currentTaskPollIntervalMs
+    if (config.task_poll_interval_ms !== oldTaskPoll) {
+      if (this.taskPollInterval) {
+        clearInterval(this.taskPollInterval)
+      }
+      this.currentTaskPollIntervalMs = config.task_poll_interval_ms
       this.startTaskPolling()
-      logger.info('Updated poll interval', { intervalMs: config.poll_interval_ms })
+      logger.info('Updated task poll interval', { intervalMs: config.task_poll_interval_ms })
     }
 
-    if (this.config.maxConcurrentTasks !== config.max_concurrent_tasks) {
+    // Update max concurrent tasks
+    if (config.max_concurrent_tasks !== oldConfig?.max_concurrent_tasks) {
       this.config.maxConcurrentTasks = config.max_concurrent_tasks
       logger.info('Updated max concurrent tasks', { maxConcurrent: config.max_concurrent_tasks })
+    }
+  }
+
+  /**
+   * Update worker schedulers when worker settings change
+   */
+  private updateWorkerSchedulers(workers: WorkerSettings, oldWorkers?: WorkerSettings): void {
+    const workerTypes: WorkerType[] = ['fetcher', 'logger', 'maintain']
+
+    for (const workerType of workerTypes) {
+      const settings = workers[workerType]
+      const oldSettings = oldWorkers?.[workerType]
+
+      // Check if we need to restart this worker's scheduler
+      const wasEnabled = oldSettings?.enabled ?? false
+      const isEnabled = settings.enabled
+      const oldInterval = this.getScheduleInterval(oldSettings)
+      const newInterval = this.getScheduleInterval(settings)
+
+      if (!isEnabled && wasEnabled) {
+        // Worker was disabled - stop scheduler
+        this.stopWorkerScheduler(workerType)
+      } else if (isEnabled && !wasEnabled) {
+        // Worker was enabled - start scheduler
+        this.startWorkerScheduler(workerType, newInterval)
+      } else if (isEnabled && newInterval !== oldInterval) {
+        // Interval changed - restart scheduler
+        this.stopWorkerScheduler(workerType)
+        this.startWorkerScheduler(workerType, newInterval)
+      }
+    }
+  }
+
+  /**
+   * Get schedule interval from worker settings
+   * Not all workers have schedule_interval_ms (e.g., suggestion, apply)
+   */
+  private getScheduleInterval(settings: { enabled: boolean; schedule_interval_ms?: number } | undefined): number {
+    if (!settings || !('schedule_interval_ms' in settings)) {
+      return 0
+    }
+    return settings.schedule_interval_ms ?? 0
+  }
+
+  /**
+   * Update worker settings from backend config
+   */
+  private updateWorkerSettings(workers: WorkerSettings): void {
+    // Update log level if logger worker settings changed
+    if (workers.logger.enabled) {
+      const currentLevel = getLogLevel()
+      const newLevel = workers.logger.log_level
+      if (currentLevel !== newLevel) {
+        setLogLevel(newLevel)
+      }
     }
   }
 
@@ -230,25 +328,109 @@ export class AgentRuntime {
   }
 
   /**
-   * Start polling for config updates
-   */
-  private startConfigPolling(): void {
-    this.configPollInterval = setInterval(async () => {
-      await this.loadConfig()
-    }, 30000) // Check config every 30 seconds
-  }
-
-  /**
    * Start polling for tasks
+   * Uses task_poll_interval_ms from config
    */
   private startTaskPolling(): void {
+    // Use backend config if available, otherwise use default
+    const intervalMs = this.backendConfig?.task_poll_interval_ms ?? this.currentTaskPollIntervalMs
+
     this.taskPollInterval = setInterval(async () => {
       if (this.isRunning && !this.isShuttingDown) {
         await this.pollAndExecuteTasks()
       }
-    }, this.currentPollingIntervalMs)
+    }, intervalMs)
 
+    logger.info('Task polling started', { intervalMs })
+
+    // Initial poll
     this.pollAndExecuteTasks()
+  }
+
+  /**
+   * Start all worker schedulers based on config
+   */
+  private startWorkerSchedulers(): void {
+    if (!this.backendConfig) {
+      logger.warn('Cannot start worker schedulers without config')
+      return
+    }
+
+    const workers = this.backendConfig.workers
+
+    // Start scheduler for each enabled worker that has a schedule
+    if (workers.fetcher.enabled) {
+      this.startWorkerScheduler('fetcher', workers.fetcher.schedule_interval_ms)
+    }
+    if (workers.logger.enabled) {
+      this.startWorkerScheduler('logger', workers.logger.schedule_interval_ms)
+    }
+    if (workers.maintain.enabled) {
+      this.startWorkerScheduler('maintain', workers.maintain.schedule_interval_ms)
+    }
+
+    // Note: suggestion and apply workers don't have schedulers
+    // They respond to tasks created by other processes (e.g., vote triggers)
+  }
+
+  /**
+   * Start a scheduler for a specific worker type
+   */
+  private startWorkerScheduler(workerType: WorkerType, intervalMs: number): void {
+    if (this.workerSchedulers.has(workerType)) {
+      logger.warn('Worker scheduler already running', { workerType })
+      return
+    }
+
+    logger.info('Starting worker scheduler', { workerType, intervalMs })
+
+    const scheduler = setInterval(async () => {
+      if (this.isRunning && !this.isShuttingDown) {
+        await this.createScheduledTask(workerType)
+      }
+    }, intervalMs)
+
+    this.workerSchedulers.set(workerType, scheduler)
+
+    // Create initial task immediately
+    this.createScheduledTask(workerType)
+  }
+
+  /**
+   * Stop a worker scheduler
+   */
+  private stopWorkerScheduler(workerType: WorkerType): void {
+    const scheduler = this.workerSchedulers.get(workerType)
+    if (scheduler) {
+      clearInterval(scheduler)
+      this.workerSchedulers.delete(workerType)
+      logger.info('Stopped worker scheduler', { workerType })
+    }
+  }
+
+  /**
+   * Create a scheduled task for a worker
+   * Deduplication is handled by the backend (returns 'already_pending' if task exists)
+   */
+  private async createScheduledTask(workerType: WorkerType): Promise<void> {
+    try {
+      const request: CreateTaskRequest = {
+        type: workerType,
+        priority: 'normal',
+      }
+
+      const response = await this.apiClient.createTask(request)
+
+      if (response) {
+        if (response.status === 'pending') {
+          logger.info('Scheduled task created', { workerType, taskId: response.task_id })
+        } else {
+          logger.debug('Task already pending', { workerType, taskId: response.task_id })
+        }
+      }
+    } catch (error) {
+      logger.error('Failed to create scheduled task', { workerType, error })
+    }
   }
 
   /**
@@ -259,11 +441,11 @@ export class AgentRuntime {
       clearInterval(this.taskPollInterval)
     }
 
-    const baseDelay = this.config.pollIntervalMs
-    const maxDelay = 300000 // 5 minutes
+    const baseDelay = this.backendConfig?.task_poll_interval_ms ?? this.currentTaskPollIntervalMs
+    const maxDelay = 3600000 // 1 hour max
     const backoffDelay = Math.min(baseDelay * Math.pow(2, this.consecutivePollingFailures), maxDelay)
 
-    this.currentPollingIntervalMs = backoffDelay
+    this.currentTaskPollIntervalMs = backoffDelay
 
     logger.warn('Restarting task polling with exponential backoff', {
       consecutiveFailures: this.consecutivePollingFailures,
@@ -278,12 +460,13 @@ export class AgentRuntime {
    * Reset task polling to normal interval after successful poll
    */
   private resetTaskPollingInterval(): void {
-    if (this.currentPollingIntervalMs !== this.config.pollIntervalMs) {
+    const normalInterval = this.backendConfig?.task_poll_interval_ms ?? 300000
+    if (this.currentTaskPollIntervalMs !== normalInterval) {
       logger.info('Resetting task polling to normal interval', {
-        intervalMs: this.config.pollIntervalMs,
+        intervalMs: normalInterval,
       })
 
-      this.currentPollingIntervalMs = this.config.pollIntervalMs
+      this.currentTaskPollIntervalMs = normalInterval
 
       if (this.taskPollInterval) {
         clearInterval(this.taskPollInterval)
@@ -297,7 +480,7 @@ export class AgentRuntime {
    */
   private async sendHeartbeat(): Promise<void> {
     try {
-      logger.info('Sending heartbeat...')
+      logger.debug('Sending heartbeat...')
       const sent = await this.apiClient.sendSignal({
         type: 'heartbeat',
         payload: {
@@ -308,7 +491,7 @@ export class AgentRuntime {
           memory: process.memoryUsage(),
         },
       })
-      logger.info('Heartbeat sent', { success: sent })
+      logger.debug('Heartbeat sent', { success: sent })
 
       this.lastHeartbeatTime = Date.now()
     } catch (error) {
@@ -318,6 +501,7 @@ export class AgentRuntime {
 
   /**
    * Poll for tasks and execute them
+   * Also handles config updates via piggyback
    */
   private async pollAndExecuteTasks(): Promise<void> {
     this.lastPollTime = Date.now()
@@ -337,7 +521,16 @@ export class AgentRuntime {
         return
       }
 
-      const tasks = await this.apiClient.getTasks(availableSlots)
+      // Get tasks with potential config piggyback
+      const response = await this.apiClient.getTasks(availableSlots)
+
+      // Handle config update if piggybacked
+      if (response.config) {
+        logger.info('Received config update via piggyback', { version: response.config.version })
+        this.applyConfig(response.config)
+      }
+
+      const tasks = response.tasks
 
       if (tasks.length === 0) {
         logger.debug('No pending tasks')
@@ -411,7 +604,10 @@ export class AgentRuntime {
       })
 
       logger.info('Task completed successfully', { taskId: task.id, type: task.type })
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = getErrorMessage(error)
+      const errorStack = error instanceof Error ? error.stack : undefined
+
       if (abortController.signal.aborted) {
         logger.warn('Task execution cancelled', {
           taskId: task.id,
@@ -424,20 +620,20 @@ export class AgentRuntime {
       logger.error('Task execution failed', {
         taskId: task.id,
         type: task.type,
-        error: error.message,
+        error: errorMessage,
       })
 
-      await this.apiClient.failTask(task.id, error.message, true)
+      await this.apiClient.failTask(task.id, errorMessage, true)
 
       await this.apiClient.sendSignal({
         type: 'task_failed',
         severity: 'error',
-        message: error.message,
+        message: errorMessage,
         payload: {
           taskId: task.id,
           taskType: task.type,
-          error: error.message,
-          stack: error.stack,
+          error: errorMessage,
+          stack: errorStack,
         },
       })
     } finally {
