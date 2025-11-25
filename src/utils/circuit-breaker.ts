@@ -57,31 +57,25 @@ export class CircuitBreaker {
    * Execute a function with circuit breaker protection
    */
   async execute<T>(fn: () => Promise<T>): Promise<T> {
-    // Check circuit state
     if (this.state === CircuitState.OPEN) {
-      // Check if recovery timeout has elapsed
       if (Date.now() < this.nextAttemptTime) {
         throw new CircuitBreakerOpenError(
           `Circuit breaker is OPEN. Next attempt at ${new Date(this.nextAttemptTime).toISOString()}`
         )
       }
 
-      // Transition to HALF_OPEN for recovery attempt
       this.state = CircuitState.HALF_OPEN
       this.successCount = 0
       logger.info('Circuit breaker transitioning to HALF_OPEN for recovery attempt')
     }
 
     try {
-      // Execute with timeout
       const result = await this.executeWithTimeout(fn, this.config.timeoutMs)
 
-      // Success - handle state transitions
       this.onSuccess()
 
       return result
     } catch (error) {
-      // Failure - handle state transitions
       this.onFailure(error)
 
       throw error

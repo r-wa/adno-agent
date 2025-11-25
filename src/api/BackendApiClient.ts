@@ -62,9 +62,6 @@ export interface SignalPayload {
  */
 export class BackendApiClient {
   private config: AgentConfig
-  private workspaceId: string | null = null
-  private workspaceName: string | null = null
-  private agentId: string | null = null
   private configVersion: string | null = null
   private baseURL: string
   private defaultHeaders: Record<string, string>
@@ -78,10 +75,10 @@ export class BackendApiClient {
       'Content-Type': 'application/json',
     }
     this.circuitBreaker = new CircuitBreaker({
-      failureThreshold: 5,        // Open circuit after 5 failures
-      recoveryTimeoutMs: 60000,   // Wait 60s before attempting recovery
-      successThreshold: 2,        // Need 2 successes to close circuit
-      timeoutMs: 30000,           // 30s timeout per request
+      failureThreshold: 5,
+      recoveryTimeoutMs: 60000,
+      successThreshold: 2,
+      timeoutMs: 30000,
     })
   }
 
@@ -159,25 +156,19 @@ export class BackendApiClient {
   }
 
   /**
-   * Authenticate with the backend and get workspace context
+   * Authenticate with the backend by attempting to fetch config
+   * All agent endpoints perform authentication, so a successful config fetch confirms auth
    */
   async authenticate(): Promise<boolean> {
     try {
-      const data = await withRetry(async () => {
-        return await this.request<any>('/api/agent/auth', {
-          method: 'POST',
-        })
+      const config = await withRetry(async () => {
+        return await this.request<AgentConfigResponse>('/api/agent/config')
       }, 3, 1000)
 
-      this.workspaceId = data.workspace_id
-      this.workspaceName = data.workspace_name
-      this.agentId = data.agent_id
-      this.configVersion = data.config_version
+      this.configVersion = config.version
 
       logger.info('Authenticated successfully', {
-        workspaceId: this.workspaceId,
-        workspaceName: this.workspaceName,
-        agentId: this.agentId,
+        configVersion: this.configVersion,
       })
 
       return true
@@ -319,12 +310,14 @@ export class BackendApiClient {
 
   /**
    * Get workspace context
+   * Note: workspaceId, workspaceName, and agentId are no longer tracked
+   * as all API endpoints handle authentication internally
    */
   getWorkspaceContext() {
     return {
-      workspaceId: this.workspaceId,
-      workspaceName: this.workspaceName,
-      agentId: this.agentId,
+      workspaceId: null as string | null,
+      workspaceName: null as string | null,
+      agentId: null as string | null,
       configVersion: this.configVersion,
     }
   }

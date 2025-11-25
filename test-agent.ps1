@@ -8,8 +8,8 @@ param(
     [Parameter(Mandatory=$true, Position=0, HelpMessage="Your adno agent API key")]
     [string]$ApiKey,
 
-    [Parameter(Mandatory=$false, Position=1)]
-    [string]$ApiUrl = "https://app.adno.dev"
+    [Parameter(Mandatory=$true, Position=1, HelpMessage="adno API URL (e.g., http://localhost:3000)")]
+    [string]$ApiUrl
 )
 
 $ErrorActionPreference = "Stop"

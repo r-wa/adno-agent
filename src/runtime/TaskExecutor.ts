@@ -65,7 +65,6 @@ export class TaskExecutor {
 
     const context = this.getTaskContext(signal)
 
-    // Check if already cancelled before starting
     if (signal?.aborted) {
       throw new Error('Task cancelled before execution')
     }
@@ -78,7 +77,6 @@ export class TaskExecutor {
       })
       return result
     } catch (error: any) {
-      // Check if error was due to cancellation
       if (signal?.aborted) {
         logger.warn('Task execution cancelled', {
           taskId: task.id,
@@ -100,21 +98,11 @@ export class TaskExecutor {
    * Get task context for handlers
    */
   private getTaskContext(signal?: AbortSignal): TaskContext {
-    const workspaceContext = this.apiClient.getWorkspaceContext()
-
-    // Validate workspace context is properly initialized
-    if (!workspaceContext.workspaceId) {
-      throw new Error('Workspace ID not available. Ensure agent is authenticated before executing tasks.')
-    }
-    if (!workspaceContext.agentId) {
-      throw new Error('Agent ID not available. Ensure agent is authenticated before executing tasks.')
-    }
-
     return {
       config: this.config,
       apiClient: this.apiClient,
-      workspaceId: workspaceContext.workspaceId,
-      agentId: workspaceContext.agentId,
+      workspaceId: '',
+      agentId: '',
       workspaceConfig: this.workspaceConfig,
       signal,
     }

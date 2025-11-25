@@ -50,19 +50,15 @@ export class AgentRuntime {
     logger.info('Starting agent runtime...')
 
     try {
-      // 1. Authenticate with backend
       const authenticated = await this.apiClient.authenticate()
       if (!authenticated) {
         throw new Error('Failed to authenticate with backend')
       }
 
-      // 2. Load workspace configuration (ADO/OpenAI credentials)
       await this.loadWorkspaceConfig()
 
-      // 3. Load agent configuration
       await this.loadConfig()
 
-      // 4. Send agent_starting signal
       logger.info('Sending agent_starting signal...')
       const startingSignalSent = await this.apiClient.sendSignal({
         type: 'agent_starting',
@@ -75,7 +71,6 @@ export class AgentRuntime {
       })
       logger.info('Agent_starting signal sent', { success: startingSignalSent })
 
-      // 5. Start periodic tasks
       this.isRunning = true
       this.startHeartbeat()
       this.startConfigPolling()
@@ -99,10 +94,8 @@ export class AgentRuntime {
     this.isShuttingDown = true
     logger.info('Stopping agent runtime...')
 
-    // 1. Stop claiming new tasks
     this.isRunning = false
 
-    // 2. Clear intervals
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval)
     }
@@ -113,14 +106,12 @@ export class AgentRuntime {
       clearInterval(this.taskPollInterval)
     }
 
-    // 3. Signal active tasks to cancel gracefully
     logger.info(`Signalling ${this.activeTaskControllers.size} active tasks to cancel...`)
     for (const [taskId, controller] of this.activeTaskControllers.entries()) {
       logger.debug('Aborting task', { taskId })
       controller.abort()
     }
 
-    // 4. Wait for active tasks to complete (with timeout)
     const SHUTDOWN_TIMEOUT = 30000 // 30 seconds
     const startTime = Date.now()
 
@@ -135,7 +126,6 @@ export class AgentRuntime {
       })
     }
 
-    // 5. Send agent_stopping signal
     await this.apiClient.sendSignal({
       type: 'agent_stopping',
       message: 'Agent shutting down',
@@ -161,7 +151,6 @@ export class AgentRuntime {
 
     this.workspaceConfig = config
 
-    // Pass workspace config to task executor
     this.taskExecutor.setWorkspaceConfig(config)
 
     logger.info('Workspace configuration loaded', {
@@ -200,10 +189,8 @@ export class AgentRuntime {
       maxConcurrentTasks: config.max_concurrent_tasks,
     })
 
-    // Check for version updates
     this.versionChecker.checkVersion(config.version_info)
 
-    // Update local intervals if changed
     this.updateIntervals(config)
   }
 
@@ -211,7 +198,6 @@ export class AgentRuntime {
    * Update polling intervals based on backend config
    */
   private updateIntervals(config: AgentConfigResponse): void {
-    // Restart heartbeat if interval changed
     if (this.heartbeatInterval && this.config.heartbeatIntervalMs !== config.heartbeat_interval_ms) {
       clearInterval(this.heartbeatInterval)
       this.config.heartbeatIntervalMs = config.heartbeat_interval_ms
@@ -219,7 +205,6 @@ export class AgentRuntime {
       logger.info('Updated heartbeat interval', { intervalMs: config.heartbeat_interval_ms })
     }
 
-    // Restart task polling if interval changed
     if (this.taskPollInterval && this.config.pollIntervalMs !== config.poll_interval_ms) {
       clearInterval(this.taskPollInterval)
       this.config.pollIntervalMs = config.poll_interval_ms
@@ -227,7 +212,6 @@ export class AgentRuntime {
       logger.info('Updated poll interval', { intervalMs: config.poll_interval_ms })
     }
 
-    // Update max concurrent tasks
     if (this.config.maxConcurrentTasks !== config.max_concurrent_tasks) {
       this.config.maxConcurrentTasks = config.max_concurrent_tasks
       logger.info('Updated max concurrent tasks', { maxConcurrent: config.max_concurrent_tasks })
@@ -242,7 +226,6 @@ export class AgentRuntime {
       await this.sendHeartbeat()
     }, this.config.heartbeatIntervalMs)
 
-    // Send initial heartbeat immediately
     this.sendHeartbeat()
   }
 
@@ -265,7 +248,6 @@ export class AgentRuntime {
       }
     }, this.currentPollingIntervalMs)
 
-    // Poll immediately
     this.pollAndExecuteTasks()
   }
 
@@ -273,12 +255,10 @@ export class AgentRuntime {
    * Restart task polling with exponential backoff on failures
    */
   private restartTaskPollingWithBackoff(): void {
-    // Clear existing interval
     if (this.taskPollInterval) {
       clearInterval(this.taskPollInterval)
     }
 
-    // Calculate backoff delay: base * 2^failures, max 5 minutes
     const baseDelay = this.config.pollIntervalMs
     const maxDelay = 300000 // 5 minutes
     const backoffDelay = Math.min(baseDelay * Math.pow(2, this.consecutivePollingFailures), maxDelay)
@@ -291,7 +271,6 @@ export class AgentRuntime {
       backoffDelayMs: backoffDelay,
     })
 
-    // Restart polling with new interval
     this.startTaskPolling()
   }
 
@@ -306,7 +285,6 @@ export class AgentRuntime {
 
       this.currentPollingIntervalMs = this.config.pollIntervalMs
 
-      // Restart polling with normal interval
       if (this.taskPollInterval) {
         clearInterval(this.taskPollInterval)
       }
@@ -332,7 +310,6 @@ export class AgentRuntime {
       })
       logger.info('Heartbeat sent', { success: sent })
 
-      // Update heartbeat timestamp for stuck detection
       this.lastHeartbeatTime = Date.now()
     } catch (error) {
       logger.error('Failed to send heartbeat', { error })
@@ -343,11 +320,9 @@ export class AgentRuntime {
    * Poll for tasks and execute them
    */
   private async pollAndExecuteTasks(): Promise<void> {
-    // Update poll timestamp for stuck detection
     this.lastPollTime = Date.now()
 
     try {
-      // Check if we have capacity for more tasks
       const availableSlots = this.config.maxConcurrentTasks - this.activeTasks.size
       if (availableSlots <= 0) {
         logger.debug('No available task slots', {
@@ -362,7 +337,6 @@ export class AgentRuntime {
         return
       }
 
-      // Get pending tasks
       const tasks = await this.apiClient.getTasks(availableSlots)
 
       if (tasks.length === 0) {
@@ -373,14 +347,12 @@ export class AgentRuntime {
           tasks: tasks.map(t => ({ id: t.id, type: t.type })),
         })
 
-        // Execute tasks in parallel (up to available slots)
         const tasksToExecute = tasks.slice(0, availableSlots)
         await Promise.allSettled(
           tasksToExecute.map(task => this.executeTask(task))
         )
       }
 
-      // Successful poll - reset failure count and interval
       if (this.consecutivePollingFailures > 0) {
         this.consecutivePollingFailures = 0
         this.resetTaskPollingInterval()
@@ -388,7 +360,6 @@ export class AgentRuntime {
     } catch (error) {
       logger.error('Error in task polling', { error })
 
-      // Increment failure count and apply exponential backoff
       this.consecutivePollingFailures++
       this.restartTaskPollingWithBackoff()
     }
@@ -400,22 +371,18 @@ export class AgentRuntime {
   private async executeTask(task: AgentTask): Promise<void> {
     logger.info('Executing task', { taskId: task.id, type: task.type })
 
-    // Create abort controller for graceful cancellation
     const abortController = new AbortController()
 
     try {
-      // Claim the task
       const claimedTask = await this.apiClient.claimTask(task.id)
       if (!claimedTask) {
         logger.debug('Task already claimed by another agent', { taskId: task.id })
         return
       }
 
-      // Add to active tasks and track controller
       this.activeTasks.add(task.id)
       this.activeTaskControllers.set(task.id, abortController)
 
-      // Send task_started signal
       await this.apiClient.sendSignal({
         type: 'task_started',
         payload: {
@@ -424,20 +391,16 @@ export class AgentRuntime {
         },
       })
 
-      // Execute the task with abort signal
       const result = await this.taskExecutor.execute(claimedTask, abortController.signal)
 
-      // Check if cancelled during execution
       if (abortController.signal.aborted) {
         logger.warn('Task was cancelled during execution', { taskId: task.id })
         await this.apiClient.failTask(task.id, 'Task cancelled during shutdown', false)
         return
       }
 
-      // Mark as complete
       await this.apiClient.completeTask(task.id, result)
 
-      // Send task_completed signal
       await this.apiClient.sendSignal({
         type: 'task_completed',
         payload: {
@@ -449,7 +412,6 @@ export class AgentRuntime {
 
       logger.info('Task completed successfully', { taskId: task.id, type: task.type })
     } catch (error: any) {
-      // Check if error was due to cancellation
       if (abortController.signal.aborted) {
         logger.warn('Task execution cancelled', {
           taskId: task.id,
@@ -465,10 +427,8 @@ export class AgentRuntime {
         error: error.message,
       })
 
-      // Mark as failed
       await this.apiClient.failTask(task.id, error.message, true)
 
-      // Send task_failed signal
       await this.apiClient.sendSignal({
         type: 'task_failed',
         severity: 'error',
@@ -481,7 +441,6 @@ export class AgentRuntime {
         },
       })
     } finally {
-      // Remove from active tasks and controllers
       this.activeTasks.delete(task.id)
       this.activeTaskControllers.delete(task.id)
     }

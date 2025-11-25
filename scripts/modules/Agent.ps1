@@ -10,13 +10,13 @@ function Test-ApiConnection {
     )
 
     Write-Status "Testing API connection..."
+    $uri = "$ApiUrl/api/agent/config"
+    Write-Detail -Key "Endpoint" -Value $uri
 
     try {
         $headers = @{
             "Authorization" = "Bearer $ApiKey"
         }
-
-        $uri = "$ApiUrl/api/agent/config"
 
         $response = Invoke-RestMethod `
             -Uri $uri `
@@ -32,7 +32,13 @@ function Test-ApiConnection {
         if ($statusCode -eq 401) {
             Write-Error "Invalid API key"
         } elseif ($statusCode -eq 404) {
-            Write-Error "API endpoint not found - check URL"
+            Write-Error "API endpoint not found at: $uri"
+        } elseif ($statusCode -eq 525) {
+            Write-Error "SSL handshake failed (error 525)"
+            Write-Info "This usually means the server isn't properly configured for HTTPS"
+            Write-Info "Check that $ApiUrl is correct and the server is running"
+        } elseif ($statusCode) {
+            Write-Error "API connection failed (HTTP $statusCode)"
         } else {
             Write-Error "API connection failed: $_"
         }
@@ -129,15 +135,15 @@ function Register-Agent {
         return $false
     }
 
-    # Remove existing service if Force
+    # Phase 1: Remove existing service
     if ($Force -and (Test-ServiceExists)) {
-        Write-Status "Removing existing service..."
         Stop-ServiceSafely | Out-Null
         Remove-Service | Out-Null
         Start-Sleep -Seconds 2
+        Write-Host ""
     }
 
-    # Install files
+    # Phase 2: Install files
     $installedBinary = Install-AgentFiles -SourceBinary $LocalBinary
 
     # Prepare environment variables
@@ -151,7 +157,9 @@ function Register-Agent {
         $environment[$key] = $AdditionalEnv[$key]
     }
 
-    # Install service
+    Write-Host ""
+
+    # Phase 3: Install and configure service
     $installed = Install-ServiceWithNSSM `
         -BinaryPath $installedBinary `
         -Environment $environment
@@ -161,17 +169,17 @@ function Register-Agent {
         return $false
     }
 
-    # Configure logging
     Set-ServiceLogging | Out-Null
 
-    # Start service
+    Write-Host ""
+
+    # Phase 4: Start and verify
     $started = Start-ServiceManaged
     if (!$started) {
         Write-Error "Service installed but failed to start"
         return $false
     }
 
-    # Verify installation
     return Verify-Installation -ApiUrl $ApiUrl -ApiKey $ApiKey
 }
 

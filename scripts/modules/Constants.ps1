@@ -7,6 +7,7 @@ $Script:Symbols = @{
     Success = [char]0x2713    # ✓
     Error   = [char]0x2A2F    # ⨯
     Info    = [char]0x2022    # •
+    Warning = [char]0x25CF    # ●
 }
 
 # Service configuration
@@ -18,7 +19,6 @@ $Script:ServiceConfig = @{
 
 # Default configuration values
 $Script:Defaults = @{
-    ApiUrl              = "https://app.adno.dev"
     PollIntervalMs      = 30000
     HeartbeatIntervalMs = 60000
     MaxConcurrentTasks  = 3

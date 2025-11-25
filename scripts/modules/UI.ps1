@@ -23,6 +23,11 @@ function Write-Error {
     Write-Host "$($Script:Symbols.Error) $Message" -ForegroundColor Red
 }
 
+function Write-Warning {
+    param([string]$Message)
+    Write-Host "$($Script:Symbols.Warning) $Message" -ForegroundColor Yellow
+}
+
 function Write-Info {
     param([string]$Message)
     Write-Host "$($Script:Symbols.Info) $Message" -ForegroundColor Gray

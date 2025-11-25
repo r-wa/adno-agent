@@ -32,7 +32,7 @@ $envFile = Import-EnvFile -Path (Join-Path (Split-Path $PSScriptRoot) ".env")
 # Get configuration values with precedence
 $config = @{
     ApiKey = Get-ConfigValue -Name "ADNO_API_KEY" -CmdValue $ApiKey -EnvFile $envFile
-    ApiUrl = Get-ConfigValue -Name "ADNO_API_URL" -CmdValue $ApiUrl -EnvFile $envFile -Default "https://app.adno.dev"
+    ApiUrl = Get-ConfigValue -Name "ADNO_API_URL" -CmdValue $ApiUrl -EnvFile $envFile
 }
 
 # Additional environment variables
@@ -59,9 +59,10 @@ if (!$config.ApiKey) {
 
 if (!$config.ApiUrl) {
     Write-Host ""
-    $config.ApiUrl = Read-Host "Enter API URL (or press Enter for default)"
+    $config.ApiUrl = Read-Host "Enter API URL"
     if (!$config.ApiUrl) {
-        $config.ApiUrl = "https://app.adno.dev"
+        Write-Error "API URL is required. Please enter a valid URL or set ADNO_API_URL in your .env file."
+        exit 1
     }
 }
 

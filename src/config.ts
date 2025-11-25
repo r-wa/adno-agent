@@ -32,10 +32,14 @@ export interface AgentConfig {
  * Load agent configuration from environment variables
  */
 export function loadConfig(): AgentConfig {
+  if (!process.env.ADNO_API_URL) {
+    throw new Error('ADNO_API_URL environment variable is required. Please set it in your .env file.')
+  }
+
   return {
     // Required
     apiKey: process.env.ADNO_API_KEY || '',
-    apiUrl: process.env.ADNO_API_URL || 'https://app.adno.dev',
+    apiUrl: process.env.ADNO_API_URL,
 
     // Agent settings (with defaults)
     pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || '30000', 10),

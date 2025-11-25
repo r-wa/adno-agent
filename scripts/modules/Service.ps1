@@ -137,6 +137,9 @@ function Install-ServiceWithNSSM {
     # Set startup type
     & $Script:Paths.NssmExe set $ServiceName Start SERVICE_AUTO_START | Out-Null
 
+    # Clear any existing environment variables (important for reinstalls)
+    & $Script:Paths.NssmExe reset $ServiceName AppEnvironmentExtra 2>&1 | Out-Null
+
     # Configure restart behavior
     & $Script:Paths.NssmExe set $ServiceName AppRestartDelay 1000 | Out-Null
     & $Script:Paths.NssmExe set $ServiceName AppExit Default Restart | Out-Null
@@ -144,10 +147,18 @@ function Install-ServiceWithNSSM {
     # Disable PAUSE/RESUME controls (not compatible with Node.js)
     & $Script:Paths.NssmExe set $ServiceName AppStopMethodSkip 14 | Out-Null
 
-    # Set environment variables
+    # Set environment variables (NSSM requires + prefix to append, not overwrite)
+    $isFirst = $true
     foreach ($key in $Environment.Keys) {
         if ($Environment[$key]) {
-            & $Script:Paths.NssmExe set $ServiceName AppEnvironmentExtra "${key}=$($Environment[$key])" | Out-Null
+            if ($isFirst) {
+                # First var: set without + prefix
+                & $Script:Paths.NssmExe set $ServiceName AppEnvironmentExtra "${key}=$($Environment[$key])" | Out-Null
+                $isFirst = $false
+            } else {
+                # Subsequent vars: use + prefix to append
+                & $Script:Paths.NssmExe set $ServiceName AppEnvironmentExtra "+${key}=$($Environment[$key])" | Out-Null
+            }
         }
     }
 
@@ -195,11 +206,30 @@ function Start-ServiceManaged {
     Write-Status "Starting service..."
 
     try {
-        Start-Service -Name $ServiceName -ErrorAction Stop
+        # Start service (suppress default PowerShell warnings)
+        Start-Service -Name $ServiceName -ErrorAction Stop -WarningAction SilentlyContinue
 
-        # Wait for service to start
+        # Custom wait loop with our warning style
         $service = Get-Service -Name $ServiceName
-        $service.WaitForStatus('Running', [TimeSpan]::FromSeconds($TimeoutSeconds))
+        $startTime = Get-Date
+        $timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+        $warningShown = $false
+
+        while ($service.Status -ne 'Running') {
+            $elapsed = (Get-Date) - $startTime
+            if ($elapsed -ge $timeout) {
+                throw "Service did not start within $TimeoutSeconds seconds"
+            }
+
+            # Show warning after 2 seconds of waiting
+            if (!$warningShown -and $elapsed.TotalSeconds -ge 2) {
+                Write-Warning "Waiting for service to start..."
+                $warningShown = $true
+            }
+
+            Start-Sleep -Milliseconds 500
+            $service.Refresh()
+        }
 
         Write-Success "Service started"
         return $true

@@ -21,13 +21,32 @@ Show-Banner -Title "Agent Reinstall (Development)"
 $agentDir = Split-Path $PSScriptRoot -Parent
 
 # Load environment configuration
-$envFile = Import-EnvFile -Path (Join-Path $agentDir ".env")
+$envPath = Join-Path $agentDir ".env"
+$envFile = Import-EnvFile -Path $envPath
+
+# Validate .env was loaded
+if ($envFile.Count -eq 0) {
+    Write-Error "No configuration loaded from .env file"
+    Write-Info "Expected .env file at: $envPath"
+    Write-Info "Create one with ADNO_API_KEY and ADNO_API_URL"
+    exit 1
+}
 
 # Get configuration from .env
-$config = @{
-    ApiKey = Get-ConfigValue -Name "ADNO_API_KEY" -EnvFile $envFile -Required
-    ApiUrl = Get-ConfigValue -Name "ADNO_API_URL" -EnvFile $envFile -Default "https://app.adno.dev"
+try {
+    $config = @{
+        ApiKey = Get-ConfigValue -Name "ADNO_API_KEY" -EnvFile $envFile -Required
+        ApiUrl = Get-ConfigValue -Name "ADNO_API_URL" -EnvFile $envFile -Required
+    }
+} catch {
+    Write-Error "Missing required configuration"
+    Write-Info "Ensure .env contains ADNO_API_KEY and ADNO_API_URL"
+    exit 1
 }
+
+# Show configuration sources for transparency
+Show-Configuration -EnvFile $envFile
+Write-Host ""
 
 # Additional environment variables
 $additionalEnv = Get-AgentEnvironment -EnvFile $envFile

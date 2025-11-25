@@ -31,7 +31,7 @@ Invoke-WebRequest -Uri "https://raw.githubusercontent.com/r-wa/adno-agent/main/i
 ```
 
 **Optional parameters:**
-- `-ApiUrl` - Custom adno server URL (default: `https://app.adno.dev`)
+- `-ApiUrl` - adno server URL (required if not set in .env file)
 - `-Version` - Specific version to install (default: `latest`)
 - `-InstallDir` - Custom installation directory (default: `C:\Program Files\adno Agent`)
 
@@ -68,7 +68,7 @@ The installer will:
 3. **Configure environment variables**:
    ```powershell
    [Environment]::SetEnvironmentVariable('ADNO_API_KEY', 'your-api-key-here', 'Machine')
-   [Environment]::SetEnvironmentVariable('ADNO_API_URL', 'https://app.adno.dev', 'Machine')
+   [Environment]::SetEnvironmentVariable('ADNO_API_URL', 'https://your-adno-instance.com', 'Machine')
    ```
 
 4. **Install as Windows service**:
@@ -84,7 +84,7 @@ The agent is configured via environment variables:
 ### Required
 
 - `ADNO_API_KEY`: Your agent API key from the adno web app
-- `ADNO_API_URL`: URL of your adno instance (e.g., `https://app.adno.dev`)
+- `ADNO_API_URL`: URL of your adno instance (e.g., `http://localhost:3000` or `https://your-adno-instance.com`)
 
 ### Optional
 

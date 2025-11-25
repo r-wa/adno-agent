@@ -10,52 +10,63 @@ function Import-EnvFile {
 
     # Return empty hashtable if path is null or empty
     if ([string]::IsNullOrWhiteSpace($Path)) {
+        Write-Warning "No .env path specified"
         return @{}
     }
 
     # Return empty hashtable if file doesn't exist
     if (!(Test-Path $Path -ErrorAction SilentlyContinue)) {
+        Write-Warning ".env file not found at: $Path"
         return @{}
     }
 
     $envVars = @{}
 
     try {
+        # Read file content
         $content = Get-Content $Path -ErrorAction Stop
-        if ($null -eq $content) {
+        if (-not $content) {
+            Write-Warning ".env file is empty: $Path"
             return @{}
         }
 
-        $content | ForEach-Object {
-            $line = $_.Trim()
-            if ($line -and !$line.StartsWith('#')) {
-                if ($line -match '^([^=]+)=(.*)$') {
-                    $key = $matches[1].Trim()
-                    $value = $matches[2].Trim()
+        # Ensure content is an array
+        $lines = @($content)
 
-                    # Remove surrounding quotes if present
-                    if ($value -match '^["''](.*)["'']$') {
-                        $value = $matches[1]
-                    }
+        foreach ($rawLine in $lines) {
+            if (-not $rawLine) { continue }
 
-                    $envVars[$key] = $value
+            $line = "$rawLine".Trim()
+            if (-not $line) { continue }
+            if ($line[0] -eq '#') { continue }
 
-                    # Optionally set as environment variable
-                    if ($OverrideExisting -or -not $env:PSBoundParameters.ContainsKey($key)) {
-                        Set-Item -Path "env:$key" -Value $value -ErrorAction SilentlyContinue
+            $eqIndex = $line.IndexOf('=')
+            if ($eqIndex -gt 0) {
+                $key = $line.Substring(0, $eqIndex).Trim()
+                $value = $line.Substring($eqIndex + 1).Trim()
+
+                # Remove surrounding quotes if present
+                if ($value.Length -ge 2) {
+                    $firstChar = $value[0]
+                    $lastChar = $value[$value.Length - 1]
+                    if (($firstChar -eq '"' -or $firstChar -eq "'") -and $firstChar -eq $lastChar) {
+                        $value = $value.Substring(1, $value.Length - 2)
                     }
                 }
+
+                $envVars[$key] = $value
             }
         }
     } catch {
-        # Silently return empty hashtable on any error
+        Write-Error "Failed to read .env file at line: $rawLine - Error: $_"
         return @{}
     }
 
     return $envVars
 }
 
-# Get configuration value with precedence: CmdLine > EnvVar > .env > Default
+# Get configuration value with precedence: CmdLine > .env > EnvVar > Default
+# Note: .env takes priority over system env vars for development workflows
 function Get-ConfigValue {
     param(
         [string]$Name,
@@ -68,20 +79,20 @@ function Get-ConfigValue {
     # Environment variable names are typically uppercase with underscores
     $envName = $Name.ToUpper().Replace('-', '_')
 
-    # Check command line parameter
+    # Check command line parameter (highest priority)
     if ($CmdValue) {
         return $CmdValue
     }
 
-    # Check environment variable
+    # Check .env file (takes priority over system env vars)
+    if ($EnvFile.ContainsKey($envName)) {
+        return $EnvFile[$envName]
+    }
+
+    # Check system environment variable
     $envValue = [Environment]::GetEnvironmentVariable($envName)
     if ($envValue) {
         return $envValue
-    }
-
-    # Check .env file
-    if ($EnvFile.ContainsKey($envName)) {
-        return $EnvFile[$envName]
     }
 
     # Check defaults from Constants module
@@ -167,6 +178,63 @@ function Get-AgentEnvironment {
         POLL_INTERVAL_MS        = Get-ConfigValue -Name "POLL_INTERVAL_MS" -EnvFile $EnvFile -Default $Script:Defaults.PollIntervalMs
         HEARTBEAT_INTERVAL_MS   = Get-ConfigValue -Name "HEARTBEAT_INTERVAL_MS" -EnvFile $EnvFile -Default $Script:Defaults.HeartbeatIntervalMs
         MAX_CONCURRENT_TASKS    = Get-ConfigValue -Name "MAX_CONCURRENT_TASKS" -EnvFile $EnvFile -Default $Script:Defaults.MaxConcurrentTasks
+    }
+}
+
+# Get the source of a configuration value for diagnostics
+function Get-ConfigSource {
+    param(
+        [string]$Name,
+        [object]$CmdValue,
+        [hashtable]$EnvFile = @{}
+    )
+
+    $envName = $Name.ToUpper().Replace('-', '_')
+
+    if ($CmdValue) {
+        return "parameter"
+    }
+
+    if ($EnvFile.ContainsKey($envName)) {
+        return ".env"
+    }
+
+    $envValue = [Environment]::GetEnvironmentVariable($envName)
+    if ($envValue) {
+        return "system env"
+    }
+
+    if ($Script:Defaults.ContainsKey($Name)) {
+        return "default"
+    }
+
+    return "not set"
+}
+
+# Show configuration with sources for debugging
+function Show-Configuration {
+    param(
+        [hashtable]$EnvFile = @{},
+        [hashtable]$Config = @{}
+    )
+
+    Write-Status "Configuration"
+
+    # Show key configuration values with their sources
+    $apiUrl = Get-ConfigValue -Name "ADNO_API_URL" -EnvFile $EnvFile
+    $apiUrlSource = Get-ConfigSource -Name "ADNO_API_URL" -EnvFile $EnvFile
+
+    $apiKey = Get-ConfigValue -Name "ADNO_API_KEY" -EnvFile $EnvFile
+    $apiKeySource = Get-ConfigSource -Name "ADNO_API_KEY" -EnvFile $EnvFile
+    $apiKeyDisplay = if ($apiKey) { $apiKey.Substring(0, [Math]::Min(12, $apiKey.Length)) + "..." } else { "(not set)" }
+
+    Write-Detail -Key "API URL" -Value "$apiUrl ($apiUrlSource)"
+    Write-Detail -Key "API Key" -Value "$apiKeyDisplay ($apiKeySource)"
+
+    # Check for potential conflicts (system env var differs from .env)
+    $systemApiUrl = [Environment]::GetEnvironmentVariable("ADNO_API_URL")
+    if ($systemApiUrl -and $EnvFile.ContainsKey("ADNO_API_URL") -and $systemApiUrl -ne $EnvFile["ADNO_API_URL"]) {
+        Write-Warning "System env ADNO_API_URL='$systemApiUrl' differs from .env (using .env)"
     }
 }
 

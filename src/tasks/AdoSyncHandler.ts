@@ -30,7 +30,6 @@ export class AdoSyncHandler implements TaskHandler {
   async execute(task: AgentTask, context: TaskContext): Promise<Record<string, any>> {
     logger.info('Starting ADO sync', { taskId: task.id })
 
-    // Get ADO configuration
     const adoConfig = this.getAdoConfig(context)
     if (!adoConfig.organization || !adoConfig.project || !adoConfig.patToken) {
       throw new Error('ADO configuration is incomplete. Set ADO_ORGANIZATION, ADO_PROJECT, and ADO_PAT_TOKEN')
