@@ -127,6 +127,21 @@ function createLogger(): pino.Logger {
 const pinoLogger = createLogger()
 
 /**
+ * Flush logs synchronously before process exit
+ * This ensures buffered logs are written to stdout/stderr before termination
+ */
+export function flushLogs(): void {
+  try {
+    // pino.flush() is synchronous when using multistream
+    if (typeof pinoLogger.flush === 'function') {
+      pinoLogger.flush()
+    }
+  } catch {
+    // Ignore flush errors during shutdown
+  }
+}
+
+/**
  * Compatibility wrapper for the old logger API
  * Supports both old API (message, data) and pino API (data, message)
  */

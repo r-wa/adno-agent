@@ -232,9 +232,36 @@ function Start-ServiceManaged {
         }
 
         Write-Success "Service started"
+
+        # Check for startup errors in log files
+        Start-Sleep -Seconds 2
+        $errorLogFile = Join-Path $Script:Paths.LogDir "agent-error.log"
+        $mainLogFile = Join-Path $Script:Paths.LogDir "agent.log"
+
+        if ((Test-Path $errorLogFile) -and (Get-Item $errorLogFile).Length -gt 0) {
+            Write-Warning "Errors detected in agent-error.log:"
+            Get-Content $errorLogFile -Tail 5 | ForEach-Object {
+                Write-Info "  $_"
+            }
+        }
+
+        if ((Test-Path $mainLogFile) -and (Get-Item $mainLogFile).Length -eq 0) {
+            Write-Warning "agent.log is empty - service may have failed silently"
+        }
+
         return $true
     } catch {
         Write-Error "Failed to start service: $_"
+
+        # Show log file contents on failure for debugging
+        $errorLogFile = Join-Path $Script:Paths.LogDir "agent-error.log"
+        if ((Test-Path $errorLogFile) -and (Get-Item $errorLogFile).Length -gt 0) {
+            Write-Info "Error log contents:"
+            Get-Content $errorLogFile -Tail 10 | ForEach-Object {
+                Write-Info "  $_"
+            }
+        }
+
         return $false
     }
 }

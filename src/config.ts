@@ -1,6 +1,8 @@
 import dotenv from 'dotenv'
 
-dotenv.config()
+// Load .env file with override: true to prioritize .env values over system env vars
+// This matches the PowerShell installer behavior (CmdLine > .env > SystemEnv > Default)
+dotenv.config({ override: true })
 
 export interface AgentConfig {
   // API Configuration

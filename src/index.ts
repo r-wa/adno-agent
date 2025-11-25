@@ -3,11 +3,12 @@
 process.removeAllListeners('warning')
 
 import dotenv from 'dotenv'
-dotenv.config()
+// Load .env file with override: true to prioritize .env values over system env vars
+dotenv.config({ override: true })
 
 import { AgentRuntime } from './runtime/AgentRuntime'
 import { loadConfig, validateConfig } from './config'
-import { logger } from './utils/logger'
+import { logger, flushLogs } from './utils/logger'
 
 /**
  * Main entry point for the adno agent
@@ -24,6 +25,8 @@ async function main() {
     if (!validation.valid) {
       logger.error('Configuration validation failed')
       validation.errors.forEach(error => logger.error(`  - ${error}`))
+      flushLogs()
+      await new Promise(resolve => setTimeout(resolve, 500))
       process.exit(1)
     }
 
@@ -53,19 +56,22 @@ async function main() {
     logger.info('Agent started successfully')
   } catch (error) {
     logger.error('Failed to start agent', { error })
-
-    // Don't exit immediately - Windows services need to stay alive
-    // Log the error and wait indefinitely so NSSM can detect service state
-    logger.error('Agent will remain running but inactive due to startup failure')
     logger.error('Fix the configuration and restart the service')
 
-    // Keep process alive
-    await new Promise(() => {})
+    // Flush logs before exiting to ensure error messages are captured
+    flushLogs()
+
+    // Brief delay to allow NSSM to capture output buffers
+    await new Promise(resolve => setTimeout(resolve, 1000))
+
+    // Exit with error code so NSSM can detect failure and restart
+    process.exit(1)
   }
 }
 
 // Run main function
 main().catch((error) => {
   logger.error('Unhandled error in main', { error })
-  process.exit(1)
+  flushLogs()
+  setTimeout(() => process.exit(1), 500)
 })
