@@ -46,14 +46,14 @@ export class VersionChecker {
     // Compare versions
     if (this.isNewerVersion(recommended_version, this.currentVersion)) {
       if (is_required) {
-        logger.warn(`🚨 REQUIRED UPDATE AVAILABLE: v${recommended_version}`, {
+        logger.warn(`REQUIRED UPDATE AVAILABLE: v${recommended_version}`, {
           current: this.currentVersion,
           recommended: recommended_version,
           download_url,
           release_notes: release_notes || 'No release notes',
         })
       } else if (should_update) {
-        logger.info(`📦 Update available: v${recommended_version}`, {
+        logger.info(`Update available: v${recommended_version}`, {
           current: this.currentVersion,
           recommended: recommended_version,
           download_url,

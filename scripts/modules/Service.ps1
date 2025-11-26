@@ -167,6 +167,7 @@ function Install-ServiceWithNSSM {
 }
 
 # Configure service logging
+# NSSM logs go to logs/nssm/, Pino app logs go to logs/app/ (handled by logger.ts)
 function Set-ServiceLogging {
     param(
         [string]$ServiceName = $Script:ServiceConfig.Name,
@@ -177,14 +178,23 @@ function Set-ServiceLogging {
         return $false
     }
 
-    # Create log directory
-    if (!(Test-Path $LogDirectory)) {
-        New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
+    # Use nssm subdirectory for NSSM service logs
+    $nssmLogDir = Join-Path $LogDirectory "nssm"
+
+    # Create log directories
+    if (!(Test-Path $nssmLogDir)) {
+        New-Item -ItemType Directory -Path $nssmLogDir -Force | Out-Null
     }
 
-    # Configure stdout and stderr redirection
-    $stdoutLog = Join-Path $LogDirectory "agent.log"
-    $stderrLog = Join-Path $LogDirectory "agent-error.log"
+    # Also ensure app log directory exists (for Pino logs)
+    $appLogDir = Join-Path $LogDirectory "app"
+    if (!(Test-Path $appLogDir)) {
+        New-Item -ItemType Directory -Path $appLogDir -Force | Out-Null
+    }
+
+    # Configure stdout and stderr redirection to nssm subdirectory
+    $stdoutLog = Join-Path $nssmLogDir "service.log"
+    $stderrLog = Join-Path $nssmLogDir "service-error.log"
 
     & $Script:Paths.NssmExe set $ServiceName AppStdout $stdoutLog | Out-Null
     & $Script:Paths.NssmExe set $ServiceName AppStderr $stderrLog | Out-Null
@@ -192,7 +202,8 @@ function Set-ServiceLogging {
     & $Script:Paths.NssmExe set $ServiceName AppRotateOnline 1 | Out-Null
     & $Script:Paths.NssmExe set $ServiceName AppRotateBytes 10485760 | Out-Null  # 10MB
 
-    Write-Detail -Key "Log directory" -Value $LogDirectory
+    Write-Detail -Key "NSSM logs" -Value $nssmLogDir
+    Write-Detail -Key "App logs" -Value $appLogDir
     return $true
 }
 
@@ -233,20 +244,21 @@ function Start-ServiceManaged {
 
         Write-Success "Service started"
 
-        # Check for startup errors in log files
+        # Check for startup errors in log files (now in nssm subdirectory)
         Start-Sleep -Seconds 2
-        $errorLogFile = Join-Path $Script:Paths.LogDir "agent-error.log"
-        $mainLogFile = Join-Path $Script:Paths.LogDir "agent.log"
+        $nssmLogDir = Join-Path $Script:Paths.LogDir "nssm"
+        $errorLogFile = Join-Path $nssmLogDir "service-error.log"
+        $mainLogFile = Join-Path $nssmLogDir "service.log"
 
         if ((Test-Path $errorLogFile) -and (Get-Item $errorLogFile).Length -gt 0) {
-            Write-Warning "Errors detected in agent-error.log:"
+            Write-Warning "Errors detected in service-error.log:"
             Get-Content $errorLogFile -Tail 5 | ForEach-Object {
                 Write-Info "  $_"
             }
         }
 
         if ((Test-Path $mainLogFile) -and (Get-Item $mainLogFile).Length -eq 0) {
-            Write-Warning "agent.log is empty - service may have failed silently"
+            Write-Warning "service.log is empty - service may have failed silently"
         }
 
         return $true
@@ -254,7 +266,8 @@ function Start-ServiceManaged {
         Write-Error "Failed to start service: $_"
 
         # Show log file contents on failure for debugging
-        $errorLogFile = Join-Path $Script:Paths.LogDir "agent-error.log"
+        $nssmLogDir = Join-Path $Script:Paths.LogDir "nssm"
+        $errorLogFile = Join-Path $nssmLogDir "service-error.log"
         if ((Test-Path $errorLogFile) -and (Get-Item $errorLogFile).Length -gt 0) {
             Write-Info "Error log contents:"
             Get-Content $errorLogFile -Tail 10 | ForEach-Object {

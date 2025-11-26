@@ -24,10 +24,10 @@ interface ClarityReport {
 }
 
 /**
- * Handler for clarity suggestion tasks
- * Uses Azure OpenAI to evaluate clarity and generate suggestions
+ * Handler for SUGGESTION tasks - evaluates work item clarity using AI
+ * Uses Azure OpenAI to evaluate clarity and generate improvement suggestions
  */
-export class ClaritySuggestionHandler implements TaskHandler {
+export class SuggestionHandler implements TaskHandler {
   async execute(task: AgentTask, context: TaskContext): Promise<Record<string, any>> {
     logger.info('Starting clarity suggestion', { taskId: task.id })
 

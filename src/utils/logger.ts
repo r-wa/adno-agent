@@ -1,38 +1,65 @@
 /**
  * Production-grade structured logger using Pino
  * Provides compatibility wrapper for the old logger API
+ * Supports dynamic log level changes and separate log directories
  */
 import pino from 'pino'
-import { createStream } from 'rotating-file-stream'
+import { createStream, type RotatingFileStream } from 'rotating-file-stream'
 import * as path from 'path'
+import * as fs from 'fs'
 
-// Determine log level from environment
-const logLevel = (process.env.LOG_LEVEL as pino.Level) || 'info'
+// Default log level from environment
+let currentLogLevel: pino.Level = (process.env.LOG_LEVEL as pino.Level) || 'info'
 
 // Detect if running inside pkg bundle or production environment
 // process.pkg is defined when code runs inside a pkg-bundled executable
 const isPkgBundle = (process as any).pkg !== undefined
 const isProduction = process.env.NODE_ENV === 'production'
 
-// Check if file logging is requested
-const logFilePath = process.env.LOG_FILE
+// Log directory configuration
+// Default to logs/app/ subdirectory for Pino application logs
+const DEFAULT_LOG_DIR = path.join(process.cwd(), 'logs', 'app')
+const logDir = process.env.LOG_DIR || DEFAULT_LOG_DIR
+
+// File logging configuration
+const enableFileLogging = process.env.LOG_TO_FILE === 'true' || isProduction || isPkgBundle
+const logFileName = 'agent.log'
 
 // Only use pino-pretty transport in development (not in pkg bundles)
 // pkg cannot bundle Worker Thread-based transports correctly
-const usePrettyPrint = !isPkgBundle && !isProduction && process.env.LOG_FORMAT !== 'json' && !logFilePath
+const usePrettyPrint = !isPkgBundle && !isProduction && process.env.LOG_FORMAT !== 'json' && !enableFileLogging
+
+// Store file stream reference for cleanup
+let fileStream: RotatingFileStream | undefined
+
+/**
+ * Ensure log directory exists
+ */
+function ensureLogDirectory(): boolean {
+  try {
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true })
+    }
+    return true
+  } catch (error: any) {
+    console.warn(`[Logger] Failed to create log directory ${logDir}: ${error.message}`)
+    return false
+  }
+}
 
 /**
  * Create rotating file stream for production logging
  */
-function createRotatingFileStream() {
-  if (!logFilePath) {
+function createRotatingFileStream(): RotatingFileStream | undefined {
+  if (!enableFileLogging) {
+    return undefined
+  }
+
+  if (!ensureLogDirectory()) {
     return undefined
   }
 
   try {
-    const logDir = path.dirname(logFilePath)
-    const logFileName = path.basename(logFilePath)
-
     // Create rotating stream with daily rotation and max 10 files
     const stream = createStream(logFileName, {
       path: logDir,
@@ -42,7 +69,7 @@ function createRotatingFileStream() {
       compress: 'gzip',     // Compress rotated files
     })
 
-    console.log(`[Logger] File logging enabled: ${logFilePath}`)
+    console.log(`[Logger] File logging enabled: ${path.join(logDir, logFileName)}`)
     return stream
   } catch (error: any) {
     console.warn(`[Logger] Failed to create rotating file stream: ${error.message}`)
@@ -55,11 +82,11 @@ function createRotatingFileStream() {
  * If logger initialization fails, falls back to basic JSON logging
  */
 function createLogger(): pino.Logger {
-  const fileStream = createRotatingFileStream()
+  fileStream = createRotatingFileStream()
 
   try {
-    const baseConfig = {
-      level: logLevel,
+    const baseConfig: pino.LoggerOptions = {
+      level: currentLogLevel,
 
       base: {
         pid: process.pid,
@@ -106,7 +133,7 @@ function createLogger(): pino.Logger {
     console.warn('[Logger] Failed to initialize with transport, falling back to JSON output:', error.message)
 
     return pino({
-      level: logLevel,
+      level: currentLogLevel,
       base: {
         pid: process.pid,
         hostname: process.env.COMPUTERNAME || process.env.HOSTNAME || 'unknown',
@@ -124,7 +151,7 @@ function createLogger(): pino.Logger {
 }
 
 // Create the logger instance
-const pinoLogger = createLogger()
+let pinoLogger = createLogger()
 
 /**
  * Flush logs synchronously before process exit
@@ -139,6 +166,44 @@ export function flushLogs(): void {
   } catch {
     // Ignore flush errors during shutdown
   }
+}
+
+/**
+ * Get the current log directory path
+ */
+export function getLogDirectory(): string {
+  return logDir
+}
+
+/**
+ * Get the full path to the current log file
+ */
+export function getLogFilePath(): string {
+  return path.join(logDir, logFileName)
+}
+
+/**
+ * Check if file logging is enabled
+ */
+export function isFileLoggingEnabled(): boolean {
+  return enableFileLogging && fileStream !== undefined
+}
+
+/**
+ * Get current log level
+ */
+export function getLogLevel(): pino.Level {
+  return currentLogLevel
+}
+
+/**
+ * Set the log level dynamically
+ * This updates the pino logger level at runtime
+ */
+export function setLogLevel(level: pino.Level): void {
+  currentLogLevel = level
+  pinoLogger.level = level
+  pinoLogger.info(`Log level changed to: ${level}`)
 }
 
 /**

@@ -2,10 +2,12 @@ import type { AgentConfig } from '../config'
 import type { BackendApiClient, AgentTask, WorkspaceConfigResponse } from '../api/BackendApiClient'
 import { logger } from '../utils/logger'
 
-// Task handlers will be imported here
-import { AdoSyncHandler } from '../tasks/AdoSyncHandler'
-import { ClaritySuggestionHandler } from '../tasks/ClaritySuggestionHandler'
-import { ConsensusEvaluationHandler } from '../tasks/ConsensusEvaluationHandler'
+// Task handlers - named to match backend task types
+import { FetcherHandler } from '../tasks/FetcherHandler'
+import { SuggestionHandler } from '../tasks/SuggestionHandler'
+import { ApplyHandler } from '../tasks/ApplyHandler'
+import { LoggerHandler } from '../tasks/LoggerHandler'
+import { MaintainHandler } from '../tasks/MaintainHandler'
 
 export interface TaskHandler {
   execute(task: AgentTask, context: TaskContext): Promise<Record<string, any>>
@@ -34,10 +36,18 @@ export class TaskExecutor {
     this.apiClient = apiClient
 
     // Register task handlers
+    // Task types match the backend:
+    // - FETCHER: ADO sync
+    // - SUGGESTION: AI clarity suggestions
+    // - APPLY: Apply approved suggestions
+    // - LOGGER: Transfer logs to server
+    // - MAINTAIN: Log cleanup and retention
     this.handlers = new Map<string, TaskHandler>([
-      ['ado_sync', new AdoSyncHandler()],
-      ['clarity_suggestion', new ClaritySuggestionHandler()],
-      ['consensus_evaluation', new ConsensusEvaluationHandler()],
+      ['FETCHER', new FetcherHandler()],
+      ['SUGGESTION', new SuggestionHandler()],
+      ['APPLY', new ApplyHandler()],
+      ['LOGGER', new LoggerHandler()],
+      ['MAINTAIN', new MaintainHandler()],
     ])
   }
 
@@ -101,6 +111,8 @@ export class TaskExecutor {
     return {
       config: this.config,
       apiClient: this.apiClient,
+      // workspaceId and agentId are intentionally empty - authentication and workspace context
+      // are handled by the backend via the API key. Handlers use workspaceConfig for credentials.
       workspaceId: '',
       agentId: '',
       workspaceConfig: this.workspaceConfig,

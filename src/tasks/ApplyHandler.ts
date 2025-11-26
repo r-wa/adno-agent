@@ -12,10 +12,10 @@ interface Vote {
 }
 
 /**
- * Handler for consensus evaluation tasks
- * Calculates voting consensus and sends results to backend
+ * Handler for APPLY tasks - evaluates voting consensus
+ * Calculates whether sufficient votes exist to approve a candidate
  */
-export class ConsensusEvaluationHandler implements TaskHandler {
+export class ApplyHandler implements TaskHandler {
   async execute(task: AgentTask, context: TaskContext): Promise<Record<string, any>> {
     logger.info('Starting consensus evaluation', { taskId: task.id })
 

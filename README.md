@@ -6,9 +6,11 @@ Background processing agent for [adno](https://github.com/r-wa/adno) workspace a
 
 The adno agent is a Windows service that runs in the background to process tasks for your adno workspace. It handles:
 
-- **Azure DevOps Sync**: Synchronizes work items from Azure DevOps
-- **Clarity Suggestions**: Generates AI-powered improvement suggestions for unclear work items
-- **Consensus Evaluation**: Evaluates voting consensus on suggestions
+- **FETCHER**: Synchronizes work item metadata from Azure DevOps
+- **SUGGESTION**: Generates AI-powered improvement suggestions for unclear work items
+- **APPLY**: Evaluates voting consensus to apply approved suggestions
+- **LOGGER**: Transfers agent logs to the server for centralized viewing
+- **MAINTAIN**: Cleans up old log files based on retention policy
 
 ## Installation
 
@@ -178,14 +180,21 @@ adno-agent/
 │   ├── runtime/
 │   │   ├── AgentRuntime.ts      # Main agent runtime
 │   │   └── TaskExecutor.ts      # Task execution engine
+│   ├── services/
+│   │   └── LogCollector.ts      # Collects logs for transfer
 │   ├── tasks/
-│   │   ├── AdoSyncHandler.ts             # Azure DevOps sync
-│   │   ├── ClaritySuggestionHandler.ts   # AI suggestions
-│   │   └── ConsensusEvaluationHandler.ts # Consensus evaluation
+│   │   ├── FetcherHandler.ts    # FETCHER - Azure DevOps metadata sync
+│   │   ├── SuggestionHandler.ts # SUGGESTION - AI clarity evaluation
+│   │   ├── ApplyHandler.ts      # APPLY - Consensus evaluation
+│   │   ├── LoggerHandler.ts     # LOGGER - Log transfer to server
+│   │   └── MaintainHandler.ts   # MAINTAIN - Log cleanup
 │   ├── utils/
-│   │   └── logger.ts            # Logging utility
+│   │   └── logger.ts            # Structured logging with Pino
 │   └── version/
 │       └── VersionChecker.ts    # Version checking
+├── logs/
+│   ├── app/                     # Application logs (Pino)
+│   └── nssm/                    # Service logs (NSSM stdout/stderr)
 ├── .github/
 │   └── workflows/
 │       └── release.yml          # Automated releases

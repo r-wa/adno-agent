@@ -7,26 +7,23 @@ import { createAuthenticatedClient } from '../utils/authenticated-http'
 interface AdoWorkItem {
   id: number
   fields: {
-    'System.Title'?: string  // Optional - not fetched for minimal sync
-    'System.Description'?: string  // Optional - not fetched for minimal sync
-    'Microsoft.VSTS.Common.AcceptanceCriteria'?: string  // Optional - not fetched for minimal sync
     'System.WorkItemType': string
     'System.State': string
     'System.AssignedTo'?: { displayName: string }
     'System.IterationPath'?: string
     'System.AreaPath'?: string
-    'System.ChangedDate': string  // Required for tracking changes
-    'System.CreatedDate': string  // Required for tracking creation
+    'System.ChangedDate': string
+    'System.CreatedDate': string
     'System.Tags'?: string
     [key: string]: any
   }
 }
 
 /**
- * Handler for Azure DevOps sync tasks
- * Fetches work items from ADO and sends them to backend for persistence
+ * Handler for FETCHER tasks - syncs work item metadata from Azure DevOps
+ * Only fetches metadata (IDs, dates, context); content is fetched on-demand by the web app
  */
-export class AdoSyncHandler implements TaskHandler {
+export class FetcherHandler implements TaskHandler {
   async execute(task: AgentTask, context: TaskContext): Promise<Record<string, any>> {
     logger.info('Starting ADO sync', { taskId: task.id })
 
@@ -193,24 +190,6 @@ export class AdoSyncHandler implements TaskHandler {
         tags: item.fields['System.Tags'],
       },
     }))
-  }
-
-  /**
-   * Strip HTML tags from ADO field values
-   */
-  private stripHtml(html: string): string {
-    if (!html) return ''
-
-    return html
-      .replace(/<[^>]*>/g, '') // Remove HTML tags
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/\s+/g, ' ') // Collapse whitespace
-      .trim()
   }
 
   /**
