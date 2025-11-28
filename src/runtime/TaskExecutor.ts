@@ -36,18 +36,18 @@ export class TaskExecutor {
     this.apiClient = apiClient
 
     // Register task handlers
-    // Task types match the backend:
-    // - FETCHER: ADO sync
-    // - SUGGESTION: AI-powered work item improvements
-    // - APPLY: Apply approved suggestions
-    // - LOGGER: Transfer logs to server
-    // - MAINTAIN: Log cleanup and retention
+    // Task types match the backend (lowercase):
+    // - fetcher: ADO sync
+    // - suggestion: AI-powered work item improvements
+    // - apply: Apply approved suggestions
+    // - logger: Transfer logs to server
+    // - maintain: Log cleanup and retention
     this.handlers = new Map<string, TaskHandler>([
-      ['FETCHER', new FetcherHandler()],
-      ['SUGGESTION', new SuggestionHandler()],
-      ['APPLY', new ApplyHandler()],
-      ['LOGGER', new LoggerHandler()],
-      ['MAINTAIN', new MaintainHandler()],
+      ['fetcher', new FetcherHandler()],
+      ['suggestion', new SuggestionHandler()],
+      ['apply', new ApplyHandler()],
+      ['logger', new LoggerHandler()],
+      ['maintain', new MaintainHandler()],
     ])
   }
 

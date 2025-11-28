@@ -1,5 +1,5 @@
 import type { HttpClient } from './types'
-import { HttpError } from '../utils/HttpError'
+import { HttpError, type ProblemDetails } from '../utils/HttpError'
 import { logger } from '../utils/logger'
 
 /**
@@ -39,9 +39,22 @@ export class FetchHttpClient implements HttpClient {
       const contentType = response.headers.get('content-type') || ''
       const errorText = await response.text().catch(() => 'Unknown error')
 
-      let errorMessage = errorText
+      // RFC 9457 Problem Details response
+      if (contentType.includes('application/problem+json')) {
+        try {
+          const problem: ProblemDetails = JSON.parse(errorText)
+          const message = problem.detail
+            ? `${problem.title}: ${problem.detail}`
+            : problem.title
+          throw new HttpError(message, problem.status || response.status, problem)
+        } catch (e) {
+          if (e instanceof HttpError) throw e
+          // Fall through to generic handling if parsing fails
+        }
+      }
 
-      // Pretty-print JSON responses for readability
+      // Generic JSON error response
+      let errorMessage = errorText
       if (contentType.includes('application/json')) {
         try {
           const errorJson = JSON.parse(errorText)

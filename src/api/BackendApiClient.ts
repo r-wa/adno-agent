@@ -1,11 +1,11 @@
 import type { HttpClient } from '../http/types'
 import type { ConfigVersionStore } from '../state/ConfigVersionStore'
 import { logger } from '../utils/logger'
-import { getErrorMessage, getErrorStatus } from '../utils/HttpError'
+import { getErrorMessage, getErrorStatus, getErrorInfo } from '../utils/HttpError'
 
 export interface AgentTask {
   id: string
-  type: 'FETCHER' | 'SUGGESTION' | 'APPLY' | 'LOGGER' | 'MAINTAIN'
+  type: 'fetcher' | 'suggestion' | 'apply' | 'logger' | 'maintain'
   payload: Record<string, any>
   scheduled_at: string
   priority: number
@@ -138,21 +138,25 @@ export class BackendApiClient {
 
       return true
     } catch (error: unknown) {
-      const status = getErrorStatus(error)
+      const { title, status, detail } = getErrorInfo(error)
 
       // Distinguish auth failures from infrastructure failures
       if (status === 401) {
-        logger.error('Authentication failed: Invalid or expired API key', {
+        logger.error(title || 'Authentication failed: Invalid or expired API key', {
+          status,
+          detail,
           suggestion: 'Check ADNO_API_KEY environment variable',
         })
       } else if (status === 403) {
-        logger.error('Authentication failed: Permission denied', {
+        logger.error(title || 'Authentication failed: Permission denied', {
+          status,
+          detail,
           suggestion: 'API key does not have required permissions',
         })
       } else {
-        logger.error('Authentication request failed', {
+        logger.error(title || 'Authentication request failed', {
           status,
-          error: getErrorMessage(error),
+          detail,
           suggestion: 'Check network connectivity and backend availability',
         })
       }
@@ -168,7 +172,8 @@ export class BackendApiClient {
     try {
       return await this.httpClient.request<AgentConfigResponse>('/api/agent/config')
     } catch (error: unknown) {
-      logger.error('Failed to get config', { error: getErrorMessage(error) })
+      const { title, status, detail } = getErrorInfo(error)
+      logger.error(title || 'Failed to get config', { status, detail })
       return null
     }
   }
@@ -185,7 +190,8 @@ export class BackendApiClient {
       })
       return data
     } catch (error: unknown) {
-      logger.error('[BackendApiClient] Failed to get workspace config', { error: getErrorMessage(error) })
+      const { title, status, detail } = getErrorInfo(error)
+      logger.error(title || 'Failed to get workspace config', { status, detail })
       return null
     }
   }
@@ -201,7 +207,8 @@ export class BackendApiClient {
       })
       return true
     } catch (error: unknown) {
-      logger.error('Failed to send signals', { error: getErrorMessage(error) })
+      const { title, status, detail } = getErrorInfo(error)
+      logger.error(title || 'Failed to send signals', { status, detail })
       return false
     }
   }
@@ -235,7 +242,8 @@ export class BackendApiClient {
         config: data.config,
       }
     } catch (error: unknown) {
-      logger.error('Failed to get tasks', { error: getErrorMessage(error) })
+      const { title, status, detail } = getErrorInfo(error)
+      logger.error(title || 'Failed to get tasks', { status, detail })
       return { tasks: [] }
     }
   }
@@ -257,9 +265,11 @@ export class BackendApiClient {
       })
       return data
     } catch (error: unknown) {
-      logger.error('Failed to create task', {
+      const { title, status, detail } = getErrorInfo(error)
+      logger.error(title || 'Failed to create task', {
         type: request.type,
-        error: getErrorMessage(error),
+        status,
+        detail,
       })
       return null
     }
@@ -278,7 +288,8 @@ export class BackendApiClient {
       }
       return null
     } catch (error: unknown) {
-      logger.error('Failed to claim task', { taskId, error: getErrorMessage(error) })
+      const { title, status, detail } = getErrorInfo(error)
+      logger.error(title || 'Failed to claim task', { taskId, status, detail })
       return null
     }
   }
@@ -294,7 +305,8 @@ export class BackendApiClient {
       })
       return true
     } catch (error: unknown) {
-      logger.error('Failed to complete task', { taskId, error: getErrorMessage(error) })
+      const { title, status, detail } = getErrorInfo(error)
+      logger.error(title || 'Failed to complete task', { taskId, status, detail })
       return false
     }
   }
@@ -310,7 +322,8 @@ export class BackendApiClient {
       })
       return true
     } catch (err: unknown) {
-      logger.error('Failed to fail task', { taskId, error: getErrorMessage(err) })
+      const { title, status, detail } = getErrorInfo(err)
+      logger.error(title || 'Failed to report task failure', { taskId, status, detail })
       return false
     }
   }
