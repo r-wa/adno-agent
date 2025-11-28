@@ -13,8 +13,8 @@ interface Candidate {
   field: 'TITLE' | 'DESCRIPTION' | 'ACCEPTANCE_CRITERIA'
 }
 
-interface ClarityReport {
-  clarity_score: number
+interface SuggestionReport {
+  suggestion_score: number
   issues: string[]
   suggested_improvements?: {
     title?: string
@@ -24,12 +24,12 @@ interface ClarityReport {
 }
 
 /**
- * Handler for SUGGESTION tasks - evaluates work item clarity using AI
- * Uses Azure OpenAI to evaluate clarity and generate improvement suggestions
+ * Handler for SUGGESTION tasks - evaluates work items using AI
+ * Uses Azure OpenAI to score work items and generate improvement suggestions
  */
 export class SuggestionHandler implements TaskHandler {
   async execute(task: AgentTask, context: TaskContext): Promise<Record<string, any>> {
-    logger.info('Starting clarity suggestion', { taskId: task.id })
+    logger.info('Starting suggestion evaluation', { taskId: task.id })
 
     const candidateId = task.payload.candidate_id
     if (!candidateId) {
@@ -55,11 +55,11 @@ export class SuggestionHandler implements TaskHandler {
       const candidate = await this.fetchCandidate(context, candidateId)
       logger.info('Fetched candidate', { candidateId, title: candidate.title })
 
-      // 2. Generate clarity evaluation using Azure OpenAI
-      const report = await this.evaluateClarity(validatedConfig, candidate)
-      logger.info('Generated clarity report', {
+      // 2. Generate suggestion evaluation using Azure OpenAI
+      const report = await this.evaluateSuggestion(validatedConfig, candidate)
+      logger.info('Generated suggestion report', {
         candidateId,
-        clarityScore: report.clarity_score,
+        suggestionScore: report.suggestion_score,
         issuesCount: report.issues.length,
       })
 
@@ -67,17 +67,17 @@ export class SuggestionHandler implements TaskHandler {
       const hash = this.hashCandidate(candidate)
 
       // 4. Send report to backend for persistence
-      await this.submitClarityReport(context, candidateId, report, hash)
-      logger.info('Clarity suggestion completed')
+      await this.submitSuggestionReport(context, candidateId, report, hash)
+      logger.info('Suggestion evaluation completed')
 
       return {
         candidate_id: candidateId,
-        clarity_score: report.clarity_score,
+        suggestion_score: report.suggestion_score,
         has_suggestions: !!report.suggested_improvements,
         success: true,
       }
     } catch (error: any) {
-      logger.error('Clarity suggestion failed', { error: error.message })
+      logger.error('Suggestion evaluation failed', { error: error.message })
       throw error
     }
   }
@@ -115,9 +115,9 @@ export class SuggestionHandler implements TaskHandler {
   }
 
   /**
-   * Evaluate clarity using Azure OpenAI
+   * Evaluate work item using Azure OpenAI
    */
-  private async evaluateClarity(
+  private async evaluateSuggestion(
     config: {
       endpoint: string
       apiKey: string
@@ -125,8 +125,8 @@ export class SuggestionHandler implements TaskHandler {
       apiVersion: string
     },
     candidate: Candidate
-  ): Promise<ClarityReport> {
-    const prompt = this.buildClarityPrompt(candidate)
+  ): Promise<SuggestionReport> {
+    const prompt = this.buildSuggestionPrompt(candidate)
 
     const url = `${config.endpoint}/openai/deployments/${config.deployment}/chat/completions?api-version=${config.apiVersion}`
 
@@ -136,7 +136,7 @@ export class SuggestionHandler implements TaskHandler {
         messages: [
           {
             role: 'system',
-            content: 'You are an expert at evaluating and improving work item clarity for software development teams.',
+            content: 'You are an expert at evaluating and improving work items for software development teams.',
           },
           {
             role: 'user',
@@ -156,17 +156,17 @@ export class SuggestionHandler implements TaskHandler {
     )
 
     const content = response.choices[0].message.content
-    const report = JSON.parse(content) as ClarityReport
+    const report = JSON.parse(content) as SuggestionReport
 
     return report
   }
 
   /**
-   * Build clarity evaluation prompt
+   * Build suggestion evaluation prompt
    */
-  private buildClarityPrompt(candidate: Candidate): string {
+  private buildSuggestionPrompt(candidate: Candidate): string {
     return `
-Evaluate the clarity of this work item and provide suggestions for improvement.
+Evaluate this work item and provide suggestions for improvement.
 
 **Work Item:**
 - Title: ${candidate.title}
@@ -174,13 +174,13 @@ Evaluate the clarity of this work item and provide suggestions for improvement.
 - Acceptance Criteria: ${candidate.acceptance_criteria || '(empty)'}
 
 **Instructions:**
-1. Assign a clarity score from 0-10 (10 = perfectly clear)
-2. List specific clarity issues (vague language, missing details, ambiguity)
+1. Assign a score from 0-10 (10 = excellent quality)
+2. List specific issues (vague language, missing details, ambiguity)
 3. If score < 7, provide suggested improvements
 
 **Response format (JSON):**
 {
-  "clarity_score": <number 0-10>,
+  "suggestion_score": <number 0-10>,
   "issues": ["issue 1", "issue 2", ...],
   "suggested_improvements": {
     "title": "<improved title if needed>",
@@ -210,17 +210,17 @@ Respond ONLY with valid JSON.
   }
 
   /**
-   * Submit clarity report to backend
+   * Submit suggestion report to backend
    */
-  private async submitClarityReport(
+  private async submitSuggestionReport(
     context: TaskContext,
     candidateId: string,
-    report: ClarityReport,
+    report: SuggestionReport,
     hash: string
   ): Promise<void> {
     const client = createAuthenticatedClient(context)
     await client.post(
-      `/api/agent/clarity/report`,
+      `/api/agent/suggestion/report`,
       {
         candidate_id: candidateId,
         report,

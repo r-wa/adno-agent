@@ -38,7 +38,7 @@ export class TaskExecutor {
     // Register task handlers
     // Task types match the backend:
     // - FETCHER: ADO sync
-    // - SUGGESTION: AI clarity suggestions
+    // - SUGGESTION: AI-powered work item improvements
     // - APPLY: Apply approved suggestions
     // - LOGGER: Transfer logs to server
     // - MAINTAIN: Log cleanup and retention

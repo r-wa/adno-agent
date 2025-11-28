@@ -55,7 +55,7 @@ async function main() {
 
     logger.info('Agent started successfully')
   } catch (error) {
-    logger.error('Failed to start agent', { error })
+    // Error already logged with full details in AgentRuntime.start()
     logger.error('Fix the configuration and restart the service')
 
     // Flush logs before exiting to ensure error messages are captured
@@ -71,7 +71,7 @@ async function main() {
 
 // Run main function
 main().catch((error) => {
-  logger.error('Unhandled error in main', { error })
+  logger.error({ err: error }, 'Unhandled error in main')
   flushLogs()
   setTimeout(() => process.exit(1), 500)
 })

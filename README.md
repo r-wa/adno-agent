@@ -184,7 +184,7 @@ adno-agent/
 │   │   └── LogCollector.ts      # Collects logs for transfer
 │   ├── tasks/
 │   │   ├── FetcherHandler.ts    # FETCHER - Azure DevOps metadata sync
-│   │   ├── SuggestionHandler.ts # SUGGESTION - AI clarity evaluation
+│   │   ├── SuggestionHandler.ts # SUGGESTION - AI-powered work item improvements
 │   │   ├── ApplyHandler.ts      # APPLY - Consensus evaluation
 │   │   ├── LoggerHandler.ts     # LOGGER - Log transfer to server
 │   │   └── MaintainHandler.ts   # MAINTAIN - Log cleanup

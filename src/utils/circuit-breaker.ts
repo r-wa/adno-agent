@@ -1,4 +1,5 @@
 import { logger } from './logger'
+import { getErrorStatus } from './HttpError'
 
 /**
  * Circuit breaker states
@@ -76,7 +77,13 @@ export class CircuitBreaker {
 
       return result
     } catch (error) {
-      this.onFailure(error)
+      const status = getErrorStatus(error)
+
+      // Only record 5xx errors and network failures as circuit breaker failures
+      // Skip 4xx client errors (not transient failures)
+      if (!status || status >= 500) {
+        this.onFailure(error)
+      }
 
       throw error
     }

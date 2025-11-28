@@ -1,5 +1,7 @@
 import type { AgentConfig } from '../config'
 import { BackendApiClient, type AgentTask, type AgentConfigResponse, type WorkspaceConfigResponse, type WorkerSettings, type CreateTaskRequest } from '../api/BackendApiClient'
+import { HttpClientFactory } from '../http/HttpClientFactory'
+import { InMemoryConfigVersionStore } from '../state/ConfigVersionStore'
 import { TaskExecutor } from './TaskExecutor'
 import { VersionChecker } from '../version/VersionChecker'
 import { logger, setLogLevel, getLogLevel } from '../utils/logger'
@@ -46,7 +48,30 @@ export class AgentRuntime {
 
   constructor(config: AgentConfig) {
     this.config = config
-    this.apiClient = new BackendApiClient(config)
+
+    // Create HTTP client with decorator chain (logging → circuit breaker → retry → fetch)
+    const httpClient = HttpClientFactory.createResilientClient({
+      baseURL: config.apiUrl,
+      apiKey: config.apiKey,
+      timeoutMs: 30000,
+      circuitBreaker: {
+        failureThreshold: 5,
+        recoveryTimeoutMs: 60000,
+        successThreshold: 2,
+        timeoutMs: 30000,
+      },
+      retry: {
+        maxRetries: 3,
+        backoffMs: 1000,
+      },
+    })
+
+    // Create config version store
+    const configVersionStore = new InMemoryConfigVersionStore()
+
+    // Create API client with injected dependencies
+    this.apiClient = new BackendApiClient(httpClient, configVersionStore)
+
     this.taskExecutor = new TaskExecutor(config, this.apiClient)
     this.versionChecker = new VersionChecker(config)
     // Default task poll interval (will be updated from backend config)
@@ -88,7 +113,8 @@ export class AgentRuntime {
 
       logger.info('Agent runtime started successfully')
     } catch (error) {
-      logger.error('Failed to start agent runtime', { error })
+      // Error already logged at the source (e.g., BackendApiClient.authenticate())
+      // Just re-throw to propagate up the stack
       throw error
     }
   }
@@ -606,7 +632,6 @@ export class AgentRuntime {
       logger.info('Task completed successfully', { taskId: task.id, type: task.type })
     } catch (error: unknown) {
       const errorMessage = getErrorMessage(error)
-      const errorStack = error instanceof Error ? error.stack : undefined
 
       if (abortController.signal.aborted) {
         logger.warn('Task execution cancelled', {
@@ -617,11 +642,7 @@ export class AgentRuntime {
         return
       }
 
-      logger.error('Task execution failed', {
-        taskId: task.id,
-        type: task.type,
-        error: errorMessage,
-      })
+      logger.error({ err: error, taskId: task.id, type: task.type }, 'Task execution failed')
 
       await this.apiClient.failTask(task.id, errorMessage, true)
 
@@ -633,7 +654,7 @@ export class AgentRuntime {
           taskId: task.id,
           taskType: task.type,
           error: errorMessage,
-          stack: errorStack,
+          stack: error instanceof Error ? error.stack : undefined,
         },
       })
     } finally {

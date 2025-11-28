@@ -1,7 +1,7 @@
-import type { AgentConfig } from '../config'
+import type { HttpClient } from '../http/types'
+import type { ConfigVersionStore } from '../state/ConfigVersionStore'
 import { logger } from '../utils/logger'
-import { CircuitBreaker, CircuitBreakerOpenError } from '../utils/circuit-breaker'
-import { HttpError, getErrorMessage, getErrorStatus } from '../utils/HttpError'
+import { getErrorMessage, getErrorStatus } from '../utils/HttpError'
 
 export interface AgentTask {
   id: string
@@ -62,7 +62,7 @@ export interface AgentConfigResponse {
   workers: WorkerSettings
   limits: {
     max_ado_syncs_per_hour: number
-    max_clarity_requests_per_hour: number
+    max_suggestion_requests_per_hour: number
     max_openai_tokens_per_hour: number
   }
   version: string
@@ -112,98 +112,15 @@ export interface SignalPayload {
 
 /**
  * API client for communicating with the adno backend
- * Uses native fetch API (Node 18+) instead of axios
+ * Uses injected HttpClient for all HTTP operations (retry, circuit breaker, logging handled by decorators)
  */
 export class BackendApiClient {
-  private config: AgentConfig
-  private configVersion: string | null = null
-  private baseURL: string
-  private defaultHeaders: Record<string, string>
-  private circuitBreaker: CircuitBreaker
+  private httpClient: HttpClient
+  private configVersionStore: ConfigVersionStore
 
-  constructor(config: AgentConfig) {
-    this.config = config
-    this.baseURL = config.apiUrl
-    this.defaultHeaders = {
-      'Authorization': `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
-    }
-    this.circuitBreaker = new CircuitBreaker({
-      failureThreshold: 5,
-      recoveryTimeoutMs: 60000,
-      successThreshold: 2,
-      timeoutMs: 30000,
-    })
-  }
-
-  /**
-   * Redact sensitive headers for safe logging
-   */
-  private redactHeaders(headers?: Record<string, string> | Headers): Record<string, string> {
-    if (!headers) return {}
-    const headerObj = headers instanceof Headers ? Object.fromEntries(headers.entries()) : headers as Record<string, string>
-    const redacted = { ...headerObj }
-    // Redact sensitive headers
-    const sensitiveHeaders = ['authorization', 'api-key', 'x-api-key']
-    for (const key of Object.keys(redacted)) {
-      if (sensitiveHeaders.includes(key.toLowerCase())) {
-        redacted[key] = '[REDACTED]'
-      }
-    }
-    return redacted
-  }
-
-  /**
-   * Helper method to make HTTP requests with native fetch
-   * Protected by circuit breaker to prevent cascading failures
-   * Note: Headers are never logged to protect credentials
-   */
-  private async request<T>(
-    path: string,
-    options: RequestInit = {}
-  ): Promise<T> {
-    // Wrap request in circuit breaker
-    return this.circuitBreaker.execute(async () => {
-      const url = `${this.baseURL}${path}`
-
-      logger.debug('API Request', {
-        method: options.method || 'GET',
-        url: path,
-        circuitState: this.circuitBreaker.getState(),
-        // Headers intentionally omitted for security
-      })
-
-      try {
-        const response = await fetch(url, {
-          ...options,
-          headers: {
-            ...this.defaultHeaders,
-            ...options.headers,
-          },
-          signal: AbortSignal.timeout(30000), // 30 second timeout
-        })
-
-        logger.debug('API Response', {
-          status: response.status,
-          url: path,
-        })
-
-        if (!response.ok) {
-          const errorText = await response.text().catch(() => 'Unknown error')
-          throw new HttpError(`HTTP ${response.status}: ${errorText}`, response.status)
-        }
-
-        const data = await response.json()
-        return data as T
-      } catch (error: unknown) {
-        logger.error('API Request Error', {
-          url: path,
-          message: getErrorMessage(error),
-          status: getErrorStatus(error),
-        })
-        throw error
-      }
-    })
+  constructor(httpClient: HttpClient, configVersionStore: ConfigVersionStore) {
+    this.httpClient = httpClient
+    this.configVersionStore = configVersionStore
   }
 
   /**
@@ -212,22 +129,34 @@ export class BackendApiClient {
    */
   async authenticate(): Promise<boolean> {
     try {
-      const config = await withRetry(async () => {
-        return await this.request<AgentConfigResponse>('/api/agent/config')
-      }, 3, 1000)
-
-      this.configVersion = config.version
+      const config = await this.httpClient.request<AgentConfigResponse>('/api/agent/config')
+      this.configVersionStore.setVersion(config.version)
 
       logger.info('Authenticated successfully', {
-        configVersion: this.configVersion,
+        configVersion: config.version,
       })
 
       return true
     } catch (error: unknown) {
-      logger.error('Authentication failed', {
-        error: getErrorMessage(error),
-        status: getErrorStatus(error),
-      })
+      const status = getErrorStatus(error)
+
+      // Distinguish auth failures from infrastructure failures
+      if (status === 401) {
+        logger.error('Authentication failed: Invalid or expired API key', {
+          suggestion: 'Check ADNO_API_KEY environment variable',
+        })
+      } else if (status === 403) {
+        logger.error('Authentication failed: Permission denied', {
+          suggestion: 'API key does not have required permissions',
+        })
+      } else {
+        logger.error('Authentication request failed', {
+          status,
+          error: getErrorMessage(error),
+          suggestion: 'Check network connectivity and backend availability',
+        })
+      }
+
       return false
     }
   }
@@ -237,9 +166,7 @@ export class BackendApiClient {
    */
   async getConfig(): Promise<AgentConfigResponse | null> {
     try {
-      return await withRetry(async () => {
-        return await this.request<AgentConfigResponse>('/api/agent/config')
-      }, 3, 1000)
+      return await this.httpClient.request<AgentConfigResponse>('/api/agent/config')
     } catch (error: unknown) {
       logger.error('Failed to get config', { error: getErrorMessage(error) })
       return null
@@ -251,9 +178,7 @@ export class BackendApiClient {
    */
   async getWorkspaceConfig(): Promise<WorkspaceConfigResponse | null> {
     try {
-      const data = await withRetry(async () => {
-        return await this.request<WorkspaceConfigResponse>('/api/agent/workspace-config')
-      }, 3, 1000)
+      const data = await this.httpClient.request<WorkspaceConfigResponse>('/api/agent/workspace-config')
       logger.info('[BackendApiClient] Fetched workspace configuration', {
         ado_configured: data.config_status?.ado_configured,
         openai_configured: data.config_status?.openai_configured,
@@ -270,7 +195,7 @@ export class BackendApiClient {
    */
   async sendSignals(signals: SignalPayload[]): Promise<boolean> {
     try {
-      await this.request('/api/agent/signal', {
+      await this.httpClient.request('/api/agent/signal', {
         method: 'POST',
         body: JSON.stringify({ signals }),
       })
@@ -295,14 +220,13 @@ export class BackendApiClient {
   async getTasks(limit: number = 10): Promise<GetTasksResponse> {
     try {
       // Include config_version for piggyback - server returns config only if version changed
-      const versionParam = this.configVersion ? `&config_version=${this.configVersion}` : ''
-      const data = await withRetry(async () => {
-        return await this.request<GetTasksResponse>(`/api/agent/tasks?limit=${limit}${versionParam}`)
-      }, 3, 1000)
+      const version = this.configVersionStore.getVersion()
+      const versionParam = version ? `&config_version=${version}` : ''
+      const data = await this.httpClient.request<GetTasksResponse>(`/api/agent/tasks?limit=${limit}${versionParam}`)
 
       // Update config version if new config received
       if (data.config) {
-        this.configVersion = data.config.version
+        this.configVersionStore.setVersion(data.config.version)
         logger.info('Config updated via piggyback', { version: data.config.version })
       }
 
@@ -322,12 +246,10 @@ export class BackendApiClient {
    */
   async createTask(request: CreateTaskRequest): Promise<CreateTaskResponse | null> {
     try {
-      const data = await withRetry(async () => {
-        return await this.request<CreateTaskResponse>('/api/agent/tasks', {
-          method: 'POST',
-          body: JSON.stringify(request),
-        })
-      }, 3, 1000)
+      const data = await this.httpClient.request<CreateTaskResponse>('/api/agent/tasks', {
+        method: 'POST',
+        body: JSON.stringify(request),
+      })
       logger.debug('Task created', {
         taskId: data.task_id,
         status: data.status,
@@ -348,11 +270,9 @@ export class BackendApiClient {
    */
   async claimTask(taskId: string): Promise<AgentTask | null> {
     try {
-      const data = await withRetry(async () => {
-        return await this.request<{ claimed: boolean; task?: AgentTask }>(`/api/agent/tasks/${taskId}/claim`, {
-          method: 'POST',
-        })
-      }, 3, 1000)
+      const data = await this.httpClient.request<{ claimed: boolean; task?: AgentTask }>(`/api/agent/tasks/${taskId}/claim`, {
+        method: 'POST',
+      })
       if (data.claimed) {
         return data.task || null
       }
@@ -368,12 +288,10 @@ export class BackendApiClient {
    */
   async completeTask(taskId: string, result: Record<string, any>): Promise<boolean> {
     try {
-      await withRetry(async () => {
-        return await this.request(`/api/agent/tasks/${taskId}/complete`, {
-          method: 'POST',
-          body: JSON.stringify({ result }),
-        })
-      }, 3, 1000)
+      await this.httpClient.request(`/api/agent/tasks/${taskId}/complete`, {
+        method: 'POST',
+        body: JSON.stringify({ result }),
+      })
       return true
     } catch (error: unknown) {
       logger.error('Failed to complete task', { taskId, error: getErrorMessage(error) })
@@ -386,12 +304,10 @@ export class BackendApiClient {
    */
   async failTask(taskId: string, error: string, retryable: boolean = true): Promise<boolean> {
     try {
-      await withRetry(async () => {
-        return await this.request(`/api/agent/tasks/${taskId}/fail`, {
-          method: 'POST',
-          body: JSON.stringify({ error, retryable }),
-        })
-      }, 3, 1000)
+      await this.httpClient.request(`/api/agent/tasks/${taskId}/fail`, {
+        method: 'POST',
+        body: JSON.stringify({ error, retryable }),
+      })
       return true
     } catch (err: unknown) {
       logger.error('Failed to fail task', { taskId, error: getErrorMessage(err) })
@@ -409,56 +325,7 @@ export class BackendApiClient {
       workspaceId: null as string | null,
       workspaceName: null as string | null,
       agentId: null as string | null,
-      configVersion: this.configVersion,
+      configVersion: this.configVersionStore.getVersion(),
     }
   }
-
-  /**
-   * Get circuit breaker state for monitoring
-   */
-  getCircuitBreakerState() {
-    return this.circuitBreaker.getStats()
-  }
-
-  /**
-   * Manually reset the circuit breaker
-   */
-  resetCircuitBreaker() {
-    this.circuitBreaker.reset()
-  }
-}
-
-/**
- * Retry wrapper for API calls
- */
-export async function withRetry<T>(
-  fn: () => Promise<T>,
-  maxRetries: number = 3,
-  backoffMs: number = 1000
-): Promise<T> {
-  let lastError: unknown = null
-
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn()
-    } catch (error: unknown) {
-      lastError = error
-      const status = getErrorStatus(error)
-
-      // Don't retry on 4xx errors (except 429 rate limit)
-      if (status && status >= 400 && status < 500 && status !== 429) {
-        throw error
-      }
-
-      if (attempt < maxRetries) {
-        const delay = backoffMs * Math.pow(2, attempt - 1)
-        logger.warn(`Retrying after ${delay}ms (attempt ${attempt}/${maxRetries})`, {
-          error: getErrorMessage(error),
-        })
-        await new Promise(resolve => setTimeout(resolve, delay))
-      }
-    }
-  }
-
-  throw lastError
 }
