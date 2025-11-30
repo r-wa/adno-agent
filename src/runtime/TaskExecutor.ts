@@ -1,5 +1,5 @@
 import type { AgentConfig } from '../config'
-import type { BackendApiClient, AgentTask, WorkspaceConfigResponse } from '../api/BackendApiClient'
+import type { BackendApiClient, AgentTask, WorkspaceConfigResponse, AgentConfigResponse } from '../api/BackendApiClient'
 import { logger } from '../utils/logger'
 
 // Task handlers - named to match backend task types
@@ -19,6 +19,7 @@ export interface TaskContext {
   workspaceId: string
   agentId: string
   workspaceConfig: WorkspaceConfigResponse | null
+  backendConfig: AgentConfigResponse | null  // Backend configuration with worker settings
   signal?: AbortSignal  // Cancellation signal for graceful shutdown
 }
 
@@ -29,6 +30,7 @@ export class TaskExecutor {
   private config: AgentConfig
   private apiClient: BackendApiClient
   private workspaceConfig: WorkspaceConfigResponse | null = null
+  private backendConfig: AgentConfigResponse | null = null
   private handlers: Map<string, TaskHandler>
 
   constructor(config: AgentConfig, apiClient: BackendApiClient) {
@@ -59,6 +61,17 @@ export class TaskExecutor {
     logger.info('Workspace configuration set in TaskExecutor', {
       ado_configured: config.config_status.ado_configured,
       openai_configured: config.config_status.openai_configured,
+    })
+  }
+
+  /**
+   * Set backend configuration (worker settings, limits, intervals)
+   */
+  setBackendConfig(config: AgentConfigResponse): void {
+    this.backendConfig = config
+    logger.info('Backend configuration set in TaskExecutor', {
+      version: config.version,
+      fetcherMaxItems: config.workers.fetcher.max_items,
     })
   }
 
@@ -116,6 +129,7 @@ export class TaskExecutor {
       workspaceId: '',
       agentId: '',
       workspaceConfig: this.workspaceConfig,
+      backendConfig: this.backendConfig,
       signal,
     }
   }

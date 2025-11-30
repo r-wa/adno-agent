@@ -19,13 +19,19 @@ interface AdoWorkItem {
   }
 }
 
+// Default and maximum limits for items per sync
+const DEFAULT_MAX_ITEMS = 500
+const UPSERT_BATCH_SIZE = 200  // Send candidates in batches to avoid timeout
+
 /**
  * Handler for FETCHER tasks - syncs work item metadata from Azure DevOps
  * Only fetches metadata (IDs, dates, context); content is fetched on-demand by the web app
  */
 export class FetcherHandler implements TaskHandler {
   async execute(task: AgentTask, context: TaskContext): Promise<Record<string, any>> {
-    logger.info('Starting ADO sync', { taskId: task.id })
+    // Get max_items from backend config, with fallback
+    const maxItems = context.backendConfig?.workers?.fetcher?.max_items ?? DEFAULT_MAX_ITEMS
+    logger.info('Starting ADO sync', { taskId: task.id, maxItems })
 
     const adoConfig = this.getAdoConfig(context)
     if (!adoConfig.organization || !adoConfig.project || !adoConfig.patToken) {
@@ -40,15 +46,15 @@ export class FetcherHandler implements TaskHandler {
     }
 
     try {
-      // 1. Fetch work items from ADO
-      const workItems = await this.fetchWorkItems(validatedConfig)
-      logger.info(`Fetched ${workItems.length} work items from ADO`)
+      // 1. Fetch work items from ADO (with limit)
+      const workItems = await this.fetchWorkItems(validatedConfig, maxItems)
+      logger.info(`Fetched ${workItems.length} work items from ADO (limit: ${maxItems})`)
 
       // 2. Transform to candidate format
       const candidates = this.transformWorkItems(workItems)
       logger.info(`Transformed ${candidates.length} candidates`)
 
-      // 3. Send to backend for persistence
+      // 3. Send to backend for persistence (in batches to avoid timeout)
       const result = await this.sendCandidatesToBackend(context, candidates, task.payload.sync_run_id)
       logger.info('ADO sync completed', result)
 
@@ -89,12 +95,14 @@ export class FetcherHandler implements TaskHandler {
 
   /**
    * Fetch work items from Azure DevOps using WIQL
+   * @param config ADO configuration
+   * @param maxItems Maximum number of items to fetch (applied after WIQL query)
    */
   private async fetchWorkItems(config: {
     organization: string
     project: string
     patToken: string
-  }): Promise<AdoWorkItem[]> {
+  }, maxItems: number): Promise<AdoWorkItem[]> {
     const baseUrl = `https://dev.azure.com/${config.organization}/${config.project}/_apis`
 
     // Create Basic auth header
@@ -128,13 +136,20 @@ export class FetcherHandler implements TaskHandler {
       return []
     }
 
+    // Apply max items limit (WIQL returns most recently changed first)
+    const allIds = workItemRefs.map((ref: any) => ref.id)
+    const limitedIds = allIds.slice(0, maxItems)
+
+    if (allIds.length > maxItems) {
+      logger.info(`Limiting sync from ${allIds.length} to ${maxItems} work items`)
+    }
+
     // Step 2: Fetch work item details in batches (ADO API limit is 200)
-    const ids = workItemRefs.map((ref: any) => ref.id)
     const batchSize = 200
     const allWorkItems: AdoWorkItem[] = []
 
-    for (let i = 0; i < ids.length; i += batchSize) {
-      const batchIds = ids.slice(i, i + batchSize)
+    for (let i = 0; i < limitedIds.length; i += batchSize) {
+      const batchIds = limitedIds.slice(i, i + batchSize)
       const idsParam = batchIds.join(',')
 
       // MINIMAL SYNC: Only fetch metadata fields, not content
@@ -194,6 +209,7 @@ export class FetcherHandler implements TaskHandler {
 
   /**
    * Send candidates to backend for persistence
+   * Sends in batches to avoid timeout on large payloads
    */
   private async sendCandidatesToBackend(
     context: TaskContext,
@@ -201,14 +217,40 @@ export class FetcherHandler implements TaskHandler {
     syncRunId?: string
   ): Promise<{ imported: number; updated: number; skipped: number }> {
     const client = createAuthenticatedClient(context)
-    const response = await client.post<{ imported: number; updated: number; skipped: number }>(
-      `/api/agent/candidates/upsert`,
-      {
-        candidates,
-        sync_run_id: syncRunId,
-      }
-    )
 
-    return response
+    // Aggregate results across batches
+    let totalImported = 0
+    let totalUpdated = 0
+    let totalSkipped = 0
+
+    // Send in batches to avoid timeout
+    for (let i = 0; i < candidates.length; i += UPSERT_BATCH_SIZE) {
+      const batch = candidates.slice(i, i + UPSERT_BATCH_SIZE)
+      const batchNumber = Math.floor(i / UPSERT_BATCH_SIZE) + 1
+      const totalBatches = Math.ceil(candidates.length / UPSERT_BATCH_SIZE)
+
+      logger.info(`Sending batch ${batchNumber}/${totalBatches} (${batch.length} candidates)`)
+
+      const response = await client.post<{ imported: number; updated: number; skipped: number }>(
+        `/api/agent/candidates/upsert`,
+        {
+          candidates: batch,
+          sync_run_id: syncRunId,
+        },
+        {
+          timeout: 120000,  // 2 minute timeout per batch (increased from default 30s)
+        }
+      )
+
+      totalImported += response.imported
+      totalUpdated += response.updated
+      totalSkipped += response.skipped
+    }
+
+    return {
+      imported: totalImported,
+      updated: totalUpdated,
+      skipped: totalSkipped,
+    }
   }
 }

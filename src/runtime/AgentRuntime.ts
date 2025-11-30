@@ -96,6 +96,7 @@ export class AgentRuntime {
 
       logger.info('Sending agent_starting signal...')
       const startingSignalSent = await this.apiClient.sendSignal({
+        category: 'event',
         type: 'agent_starting',
         message: 'Agent starting up',
         payload: {
@@ -166,6 +167,7 @@ export class AgentRuntime {
     }
 
     await this.apiClient.sendSignal({
+      category: 'event',
       type: 'agent_stopping',
       message: 'Agent shutting down',
       payload: {
@@ -229,6 +231,9 @@ export class AgentRuntime {
     const isInitial = !this.backendConfig
     const oldConfig = this.backendConfig
     this.backendConfig = config
+
+    // Update task executor with backend config (needed for worker settings like max_items)
+    this.taskExecutor.setBackendConfig(config)
 
     // Get enabled workers for logging
     const enabledWorkers = Object.entries(config.workers)
@@ -508,13 +513,10 @@ export class AgentRuntime {
     try {
       logger.debug('Sending heartbeat...')
       const sent = await this.apiClient.sendSignal({
+        category: 'event',
         type: 'heartbeat',
         payload: {
           version: this.versionChecker.getCurrentVersion(),
-          activeTasks: this.activeTasks.size,
-          maxConcurrentTasks: this.config.maxConcurrentTasks,
-          uptime: process.uptime(),
-          memory: process.memoryUsage(),
         },
       })
       logger.debug('Heartbeat sent', { success: sent })
@@ -603,6 +605,7 @@ export class AgentRuntime {
       this.activeTaskControllers.set(task.id, abortController)
 
       await this.apiClient.sendSignal({
+        category: 'event',
         type: 'task_started',
         payload: {
           taskId: task.id,
@@ -621,6 +624,7 @@ export class AgentRuntime {
       await this.apiClient.completeTask(task.id, result)
 
       await this.apiClient.sendSignal({
+        category: 'event',
         type: 'task_completed',
         payload: {
           taskId: task.id,
@@ -647,6 +651,7 @@ export class AgentRuntime {
       await this.apiClient.failTask(task.id, errorMessage, true)
 
       await this.apiClient.sendSignal({
+        category: 'event',
         type: 'task_failed',
         severity: 'error',
         message: errorMessage,

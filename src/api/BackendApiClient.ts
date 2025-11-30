@@ -25,6 +25,7 @@ export interface VersionInfo {
 export interface FetcherWorkerSettings {
   enabled: boolean
   schedule_interval_ms: number  // 1h/8h/24h - how often to sync from ADO
+  max_items?: number  // Maximum items to fetch per sync (100/500/1000). Default: 500
 }
 
 export interface SuggestionWorkerSettings {
@@ -102,11 +103,33 @@ export interface WorkspaceConfigResponse {
   }
 }
 
+// Signal category distinguishes operational events from application logs
+export type SignalCategory = 'event' | 'log'
+
+// Event types for operational signals (category='event')
+export type SignalEventType = 'heartbeat' | 'task_started' | 'task_completed' | 'task_failed' | 'agent_starting' | 'agent_stopping' | 'error'
+
+// Severity levels for log signals (category='log')
+export type SignalSeverity = 'debug' | 'info' | 'warn' | 'error'
+
 export interface SignalPayload {
-  type: 'heartbeat' | 'task_started' | 'task_completed' | 'task_failed' | 'log' | 'agent_starting' | 'agent_stopping' | 'error'
-  payload?: Record<string, any>
-  severity?: 'debug' | 'info' | 'warn' | 'error'
+  // Category distinguishes events from logs
+  category: SignalCategory
+
+  // For events (category='event') - the specific event type
+  // For logs (category='log') - preserved as 'log' for backwards compatibility
+  type: SignalEventType | 'log'
+
+  // Severity level (primarily for logs, but also used for error events)
+  severity?: SignalSeverity
+
+  // Human-readable message
   message?: string
+
+  // Structured data payload
+  payload?: Record<string, any>
+
+  // ISO timestamp (optional, server will use received_at if not provided)
   timestamp?: string
 }
 

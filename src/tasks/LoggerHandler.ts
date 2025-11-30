@@ -51,6 +51,7 @@ export class LoggerHandler implements TaskHandler {
    */
   private async sendLogs(context: TaskContext, logs: ParsedLogEntry[]): Promise<number> {
     const signals = logs.map(log => ({
+      category: 'log' as const,
       type: 'log' as const,
       severity: log.severity,
       message: log.message,
